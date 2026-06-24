@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+*.bin
+*.elf
+*.map
+*.log
+
+# Keep local Wi-Fi credentials out of commits.
+src/secrets.h
