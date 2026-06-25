@@ -991,7 +991,7 @@ void initUi() {
   stationTile = lv_obj_create(card);
   lv_obj_remove_style_all(stationTile);
   lv_obj_add_style(stationTile, &styleHero, 0);
-  lv_obj_set_size(stationTile, 276, 88);
+  lv_obj_set_size(stationTile, 276, 78);
   lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 34);
 
   stationIndexLabel = lv_label_create(stationTile);
@@ -1018,8 +1018,8 @@ void initUi() {
   volumeDownButton = lv_btn_create(card);
   lv_obj_remove_style_all(volumeDownButton);
   lv_obj_add_style(volumeDownButton, &styleControl, 0);
-  lv_obj_set_size(volumeDownButton, 42, 28);
-  lv_obj_align(volumeDownButton, LV_ALIGN_TOP_LEFT, 0, 132);
+  lv_obj_set_size(volumeDownButton, 40, 24);
+  lv_obj_align(volumeDownButton, LV_ALIGN_TOP_LEFT, 0, 118);
   lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
 
   volumeDownButtonLabel = lv_label_create(volumeDownButton);
@@ -1030,13 +1030,13 @@ void initUi() {
   lv_obj_add_style(volumeLabel, &styleValue, 0);
   lv_obj_set_width(volumeLabel, 92);
   lv_label_set_text(volumeLabel, "Vol 35%");
-  lv_obj_align(volumeLabel, LV_ALIGN_TOP_MID, 0, 136);
+  lv_obj_align(volumeLabel, LV_ALIGN_TOP_MID, 0, 121);
 
   volumeUpButton = lv_btn_create(card);
   lv_obj_remove_style_all(volumeUpButton);
   lv_obj_add_style(volumeUpButton, &styleControl, 0);
-  lv_obj_set_size(volumeUpButton, 42, 28);
-  lv_obj_align(volumeUpButton, LV_ALIGN_TOP_RIGHT, 0, 132);
+  lv_obj_set_size(volumeUpButton, 40, 24);
+  lv_obj_align(volumeUpButton, LV_ALIGN_TOP_RIGHT, 0, 118);
   lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
 
   volumeUpButtonLabel = lv_label_create(volumeUpButton);
