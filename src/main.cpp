@@ -117,6 +117,11 @@ bool radioAudioReady = false;
 bool radioStreaming = false;
 uint8_t currentVolumePercent = kAudioVolumePercent;
 String activeStreamUrl;
+uint32_t radioStreamStartedAtMs = 0;
+uint32_t radioLastBytesAtMs = 0;
+uint32_t radioLastStatusAtMs = 0;
+uint32_t radioCopiedBytes = 0;
+bool radioPlaybackConfirmed = false;
 
 struct AudioPinProfile {
   const char *name;
@@ -382,6 +387,17 @@ void setStatus(const char *state, const char *detail, lv_color_t dotColor, int p
   renderNow();
 }
 
+void setStreamStatus(const char *state, const Station &station, lv_color_t dotColor) {
+  if (detailLabel) {
+    lv_label_set_text_fmt(detailLabel, "%s %s", state, station.name);
+  }
+  if (stateLabel) {
+    lv_label_set_text(stateLabel, state);
+  }
+  setDotColor(dotColor);
+  renderNow();
+}
+
 bool checkEsp(esp_err_t result, const char *step) {
   if (result == ESP_OK) {
     return true;
@@ -507,6 +523,11 @@ void stopRadioStream() {
   radioI2s.end();
   radioStreaming = false;
   radioAudioReady = false;
+  radioStreamStartedAtMs = 0;
+  radioLastBytesAtMs = 0;
+  radioLastStatusAtMs = 0;
+  radioCopiedBytes = 0;
+  radioPlaybackConfirmed = false;
 }
 
 String resolveStreamUrl(const char *url) {
@@ -578,11 +599,12 @@ bool startRadioStream() {
   Serial.print(" -> ");
   Serial.println(station.url);
 
+  setStreamStatus("Connecting", station, lv_color_hex(0xffc857));
   activeStreamUrl = resolveStreamUrl(station.url);
   Serial.print("Resolved MP3 stream: ");
   Serial.println(activeStreamUrl);
 
-  setStatus("Opening", station.name, lv_color_hex(0xffc857), 72);
+  setStreamStatus("Opening", station, lv_color_hex(0xffc857));
   if (!radioStream.begin(activeStreamUrl.c_str(), "audio/mp3")) {
     Serial.println("Stream open failed.");
     stopRadioStream();
@@ -591,6 +613,12 @@ bool startRadioStream() {
   }
 
   radioStreaming = true;
+  radioStreamStartedAtMs = millis();
+  radioLastBytesAtMs = radioStreamStartedAtMs;
+  radioLastStatusAtMs = radioStreamStartedAtMs;
+  radioCopiedBytes = 0;
+  radioPlaybackConfirmed = false;
+  setStreamStatus("Buffering", station, lv_color_hex(0xffc857));
   return true;
 }
 
@@ -1509,7 +1537,31 @@ void loop() {
   }
 
   if (radioStreaming) {
-    radioCopier.copy();
+    const size_t copied = radioCopier.copy();
+    const uint32_t now = millis();
+    const Station &station = kStations[selectedStation];
+
+    if (copied > 0) {
+      radioCopiedBytes += copied;
+      radioLastBytesAtMs = now;
+
+      if (!radioPlaybackConfirmed && radioCopiedBytes > 4096) {
+        radioPlaybackConfirmed = true;
+        setStreamStatus("Playing", station, lv_color_hex(0x57cc99));
+      }
+    } else if (!radioPlaybackConfirmed && now - radioLastStatusAtMs > 1000) {
+      radioLastStatusAtMs = now;
+      if (detailLabel) {
+        lv_label_set_text_fmt(detailLabel, "Buffering %s %lus", station.name, static_cast<unsigned long>((now - radioStreamStartedAtMs) / 1000));
+      }
+      setDotColor(lv_color_hex(0xffc857));
+      renderNow();
+    } else if (radioPlaybackConfirmed && now - radioLastBytesAtMs > 3000 && now - radioLastStatusAtMs > 1000) {
+      radioLastStatusAtMs = now;
+      setStreamStatus("Buffering", station, lv_color_hex(0xffc857));
+      radioPlaybackConfirmed = false;
+      radioCopiedBytes = 0;
+    }
   }
 
   delay(audioTonePlaying ? 1 : 10);
