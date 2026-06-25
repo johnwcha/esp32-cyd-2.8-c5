@@ -111,6 +111,15 @@ Provisional ESP32-C5 CYD to MAX98357A wiring:
 | Speaker `+` | Speaker positive output | MAX98357A output only | Do not connect to ESP32 pins. |
 | Speaker `-` | Speaker negative output | MAX98357A output only | Do not connect to ESP32 ground. |
 
+Current firmware audio diagnostic:
+
+- Boot and Play run a 20% volume I2S tone sweep across three GPIO maps.
+- Listen for which on-screen/serial label produces sound:
+  - `Dev note IO8/IO9/IO26`: `BCLK=IO8`, `LRC=IO9`, `DIN=IO26`
+  - `P1 header IO8/IO4/IO26`: `BCLK=IO8`, `LRC=IO4`, `DIN=IO26`
+  - `Clock swap IO9/IO8/IO26`: `BCLK=IO9`, `LRC=IO8`, `DIN=IO26`
+- If none of the three maps produces sound, check MAX98357A `VIN`, `GND`, optional `SD` shutdown pin, and speaker output terminals before changing stream-decoder code.
+
 Safety notes:
 
 - Do not connect either speaker lead to ESP32 ground.

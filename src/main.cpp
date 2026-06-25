@@ -46,9 +46,6 @@ constexpr int8_t kTftRst = -1;
 constexpr int8_t kTftBacklight = 25;
 constexpr int8_t kTouchCs = 1;
 constexpr int8_t kSdCs = 10;
-constexpr int8_t kI2sBclk = 8;
-constexpr int8_t kI2sLrc = 9;
-constexpr int8_t kI2sDout = 26;
 constexpr uint32_t kAudioSampleRate = 44100;
 constexpr uint32_t kAudioToneHz = 880;
 constexpr uint8_t kAudioVolumePercent = 20;
@@ -57,6 +54,7 @@ constexpr int16_t kAudioToneAmplitude = (kAudioTonePeakAmplitude * kAudioVolumeP
 constexpr size_t kAudioFramesPerBuffer = 512;
 constexpr size_t kAudioSineTableSize = 256;
 constexpr uint32_t kAudioPreviewMs = 2000;
+constexpr uint32_t kAudioPinTestGapMs = 250;
 constexpr uint32_t kTouchSpiHz = 2500000;
 constexpr int16_t kTouchRawMinX = 250;
 constexpr int16_t kTouchRawMaxX = 3800;
@@ -105,6 +103,22 @@ uint32_t audioPhase = 0;
 int16_t audioSineTable[kAudioSineTableSize] = {};
 int16_t audioSampleBuffer[kAudioFramesPerBuffer * 2] = {};
 TaskHandle_t audioTaskHandle = nullptr;
+
+struct AudioPinProfile {
+  const char *name;
+  int8_t bclk;
+  int8_t lrc;
+  int8_t dout;
+};
+
+const AudioPinProfile kAudioPinProfiles[] = {
+    {"Dev note IO8/IO9/IO26", 8, 9, 26},
+    {"P1 header IO8/IO4/IO26", 8, 4, 26},
+    {"Clock swap IO9/IO8/IO26", 9, 8, 26},
+};
+
+constexpr uint8_t kAudioPinProfileCount = sizeof(kAudioPinProfiles) / sizeof(kAudioPinProfiles[0]);
+uint8_t activeAudioPinProfile = 0;
 
 struct Station {
   const char *name;
@@ -359,19 +373,45 @@ void buildAudioSineTable() {
   }
 }
 
-bool initAudioOutput() {
-  if (audioReady) {
+void deinitAudioOutput() {
+  audioTonePlaying = false;
+
+  if (audioTxChannel) {
+    i2s_channel_disable(audioTxChannel);
+    i2s_del_channel(audioTxChannel);
+    audioTxChannel = nullptr;
+  }
+
+  audioReady = false;
+  audioPhase = 0;
+}
+
+bool initAudioOutput(uint8_t profileIndex = activeAudioPinProfile) {
+  if (profileIndex >= kAudioPinProfileCount) {
+    profileIndex = 0;
+  }
+
+  if (audioReady && profileIndex == activeAudioPinProfile) {
     return true;
   }
 
+  if (audioReady || audioTxChannel) {
+    deinitAudioOutput();
+  }
+
+  activeAudioPinProfile = profileIndex;
+  const AudioPinProfile &profile = kAudioPinProfiles[activeAudioPinProfile];
+
   Serial.println();
   Serial.println("Initializing MAX98357A I2S output.");
+  Serial.print("Profile: ");
+  Serial.println(profile.name);
   Serial.print("BCLK=IO");
-  Serial.print(kI2sBclk);
+  Serial.print(profile.bclk);
   Serial.print(" LRC=IO");
-  Serial.print(kI2sLrc);
+  Serial.print(profile.lrc);
   Serial.print(" DIN=IO");
-  Serial.println(kI2sDout);
+  Serial.println(profile.dout);
   buildAudioSineTable();
 
   i2s_chan_config_t channelConfig = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -388,9 +428,9 @@ bool initAudioOutput() {
       .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
       .gpio_cfg = {
           .mclk = I2S_GPIO_UNUSED,
-          .bclk = static_cast<gpio_num_t>(kI2sBclk),
-          .ws = static_cast<gpio_num_t>(kI2sLrc),
-          .dout = static_cast<gpio_num_t>(kI2sDout),
+          .bclk = static_cast<gpio_num_t>(profile.bclk),
+          .ws = static_cast<gpio_num_t>(profile.lrc),
+          .dout = static_cast<gpio_num_t>(profile.dout),
           .din = I2S_GPIO_UNUSED,
           .invert_flags = {
               .mclk_inv = false,
@@ -455,13 +495,17 @@ void ensureAudioTask() {
 }
 
 void writeSilence() {
+  if (!audioTxChannel) {
+    return;
+  }
+
   memset(audioSampleBuffer, 0, sizeof(audioSampleBuffer));
   size_t bytesWritten = 0;
   i2s_channel_write(audioTxChannel, audioSampleBuffer, sizeof(audioSampleBuffer), &bytesWritten, 100);
 }
 
-bool playBlockingTone(uint32_t durationMs) {
-  if (!initAudioOutput()) {
+bool playBlockingToneOnProfile(uint8_t profileIndex, uint32_t durationMs) {
+  if (!initAudioOutput(profileIndex)) {
     return false;
   }
 
@@ -489,12 +533,38 @@ bool playBlockingTone(uint32_t durationMs) {
   return true;
 }
 
+bool playBlockingTone(uint32_t durationMs) {
+  return playBlockingToneOnProfile(activeAudioPinProfile, durationMs);
+}
+
+bool playAudioDiagnosticSweep(uint32_t durationMsPerProfile) {
+  bool allWritesOk = true;
+
+  for (uint8_t i = 0; i < kAudioPinProfileCount; ++i) {
+    const AudioPinProfile &profile = kAudioPinProfiles[i];
+    Serial.println();
+    Serial.print("Audio pin test ");
+    Serial.print(i + 1);
+    Serial.print("/");
+    Serial.print(kAudioPinProfileCount);
+    Serial.print(": ");
+    Serial.println(profile.name);
+
+    setStatus("Audio", profile.name, lv_color_hex(0xffc857), 40 + (i * 15));
+    allWritesOk = playBlockingToneOnProfile(i, durationMsPerProfile) && allWritesOk;
+    delay(kAudioPinTestGapMs);
+    renderNow();
+  }
+
+  return allWritesOk;
+}
+
 bool startAudioTone() {
   audioTonePlaying = true;
-  Serial.println("Audio preview tone started.");
-  const bool played = playBlockingTone(kAudioPreviewMs);
+  Serial.println("Audio diagnostic sweep started.");
+  const bool played = playAudioDiagnosticSweep(kAudioPreviewMs);
   audioTonePlaying = false;
-  Serial.println("Audio preview tone finished.");
+  Serial.println("Audio diagnostic sweep finished.");
   return played;
 }
 
@@ -1042,9 +1112,8 @@ void setup() {
 
   initDisplay();
   initUi();
-  initAudioOutput();
-  setStatus("Audio", "Boot audio test", lv_color_hex(0xffc857), 40);
-  playBlockingTone(1000);
+  setStatus("Audio", "Boot pin test", lv_color_hex(0xffc857), 40);
+  playAudioDiagnosticSweep(900);
 
   Serial.println();
   Serial.println("ESP32-C5 5 GHz Wi-Fi connection test");
