@@ -82,6 +82,8 @@ lv_obj_t *titleLabel = nullptr;
 lv_obj_t *stateLabel = nullptr;
 lv_obj_t *detailLabel = nullptr;
 lv_obj_t *touchMarker = nullptr;
+lv_obj_t *mainView = nullptr;
+lv_obj_t *volumeView = nullptr;
 
 lv_style_t styleScreen;
 lv_style_t styleCard;
@@ -155,12 +157,16 @@ lv_obj_t *stationIndexLabel = nullptr;
 lv_obj_t *prevButton = nullptr;
 lv_obj_t *playButton = nullptr;
 lv_obj_t *nextButton = nullptr;
+lv_obj_t *volumeIconButton = nullptr;
+lv_obj_t *backButton = nullptr;
 lv_obj_t *volumeDownButton = nullptr;
 lv_obj_t *volumeUpButton = nullptr;
 lv_obj_t *volumeLabel = nullptr;
 lv_obj_t *prevButtonLabel = nullptr;
 lv_obj_t *playButtonLabel = nullptr;
 lv_obj_t *nextButtonLabel = nullptr;
+lv_obj_t *volumeIconButtonLabel = nullptr;
+lv_obj_t *backButtonLabel = nullptr;
 lv_obj_t *volumeDownButtonLabel = nullptr;
 lv_obj_t *volumeUpButtonLabel = nullptr;
 
@@ -368,7 +374,9 @@ void setProgress(int value) {
 }
 
 void setStatus(const char *state, const char *detail, lv_color_t dotColor, int progress) {
-  lv_label_set_text(stateLabel, state);
+  if (stateLabel) {
+    lv_label_set_text(stateLabel, state);
+  }
   lv_label_set_text(detailLabel, detail);
   setDotColor(dotColor);
   setProgress(progress);
@@ -395,6 +403,27 @@ void refreshVolumeUi() {
   if (volumeLabel) {
     lv_label_set_text_fmt(volumeLabel, "Vol %u%%", currentVolumePercent);
   }
+}
+
+void showMainView() {
+  if (mainView) {
+    lv_obj_clear_flag(mainView, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (volumeView) {
+    lv_obj_add_flag(volumeView, LV_OBJ_FLAG_HIDDEN);
+  }
+  renderNow();
+}
+
+void showVolumeView() {
+  if (mainView) {
+    lv_obj_add_flag(mainView, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (volumeView) {
+    lv_obj_clear_flag(volumeView, LV_OBJ_FLAG_HIDDEN);
+  }
+  refreshVolumeUi();
+  renderNow();
 }
 
 void setRadioVolumePercent(uint8_t percent) {
@@ -784,7 +813,9 @@ void selectStation(uint8_t index) {
   Serial.print(station.name);
   Serial.print(" -> ");
   Serial.println(station.url);
-  lv_label_set_text(stateLabel, "Selected");
+  if (stateLabel) {
+    lv_label_set_text(stateLabel, "Selected");
+  }
   setDotColor(lv_color_hex(0x56cfe1));
   setProgress(82);
   updateStationUi();
@@ -806,7 +837,9 @@ void togglePlay() {
     isPlaying = false;
   } else {
     isPlaying = true;
-    lv_label_set_text(stateLabel, "Opening");
+    if (stateLabel) {
+      lv_label_set_text(stateLabel, "Opening");
+    }
     setDotColor(lv_color_hex(0x57cc99));
     updateStationUi();
     renderNow();
@@ -818,7 +851,9 @@ void togglePlay() {
 
   Serial.print("Radio button: ");
   Serial.println(kStations[selectedStation].name);
-  lv_label_set_text(stateLabel, radioStreaming ? "Playing" : "Ready");
+  if (stateLabel) {
+    lv_label_set_text(stateLabel, radioStreaming ? "Playing" : "Ready");
+  }
   setDotColor(radioStreaming ? lv_color_hex(0x57cc99) : lv_color_hex(0x56cfe1));
   updateStationUi();
   renderNow();
@@ -837,6 +872,16 @@ void onPlayClicked(lv_event_t *event) {
 void onNextClicked(lv_event_t *event) {
   (void)event;
   selectRelativeStation(1);
+}
+
+void onVolumeIconClicked(lv_event_t *event) {
+  (void)event;
+  showVolumeView();
+}
+
+void onBackClicked(lv_event_t *event) {
+  (void)event;
+  showMainView();
 }
 
 void onVolumeDownClicked(lv_event_t *event) {
@@ -983,16 +1028,27 @@ void initUi() {
   lv_label_set_text(titleLabel, "Internet Radio");
   lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 22, 0);
 
-  stateLabel = makeLabel(card, &styleValue);
-  lv_obj_set_width(stateLabel, 92);
-  lv_label_set_text(stateLabel, "Booting");
-  lv_obj_align(stateLabel, LV_ALIGN_TOP_RIGHT, 0, 2);
+  volumeIconButton = lv_btn_create(card);
+  lv_obj_remove_style_all(volumeIconButton);
+  lv_obj_add_style(volumeIconButton, &styleControl, 0);
+  lv_obj_set_size(volumeIconButton, 40, 28);
+  lv_obj_align(volumeIconButton, LV_ALIGN_TOP_RIGHT, 0, -4);
+  lv_obj_add_event_cb(volumeIconButton, onVolumeIconClicked, LV_EVENT_CLICKED, nullptr);
 
-  stationTile = lv_obj_create(card);
+  volumeIconButtonLabel = lv_label_create(volumeIconButton);
+  lv_label_set_text(volumeIconButtonLabel, LV_SYMBOL_VOLUME_MAX);
+  lv_obj_center(volumeIconButtonLabel);
+
+  mainView = lv_obj_create(card);
+  lv_obj_remove_style_all(mainView);
+  lv_obj_set_size(mainView, 276, 190);
+  lv_obj_align(mainView, LV_ALIGN_TOP_LEFT, 0, 34);
+
+  stationTile = lv_obj_create(mainView);
   lv_obj_remove_style_all(stationTile);
   lv_obj_add_style(stationTile, &styleHero, 0);
   lv_obj_set_size(stationTile, 276, 78);
-  lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 34);
+  lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 0);
 
   stationIndexLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationIndexLabel, &styleMuted, 0);
@@ -1015,35 +1071,7 @@ void initUi() {
   lv_label_set_text(stationTaglineLabel, "Commercial-free jazz");
   lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 30);
 
-  volumeDownButton = lv_btn_create(card);
-  lv_obj_remove_style_all(volumeDownButton);
-  lv_obj_add_style(volumeDownButton, &styleControl, 0);
-  lv_obj_set_size(volumeDownButton, 40, 24);
-  lv_obj_align(volumeDownButton, LV_ALIGN_TOP_LEFT, 0, 118);
-  lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
-
-  volumeDownButtonLabel = lv_label_create(volumeDownButton);
-  lv_label_set_text(volumeDownButtonLabel, "-");
-  lv_obj_center(volumeDownButtonLabel);
-
-  volumeLabel = lv_label_create(card);
-  lv_obj_add_style(volumeLabel, &styleValue, 0);
-  lv_obj_set_width(volumeLabel, 92);
-  lv_label_set_text(volumeLabel, "Vol 35%");
-  lv_obj_align(volumeLabel, LV_ALIGN_TOP_MID, 0, 121);
-
-  volumeUpButton = lv_btn_create(card);
-  lv_obj_remove_style_all(volumeUpButton);
-  lv_obj_add_style(volumeUpButton, &styleControl, 0);
-  lv_obj_set_size(volumeUpButton, 40, 24);
-  lv_obj_align(volumeUpButton, LV_ALIGN_TOP_RIGHT, 0, 118);
-  lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
-
-  volumeUpButtonLabel = lv_label_create(volumeUpButton);
-  lv_label_set_text(volumeUpButtonLabel, "+");
-  lv_obj_center(volumeUpButtonLabel);
-
-  prevButton = lv_btn_create(card);
+  prevButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(prevButton);
   lv_obj_add_style(prevButton, &styleControl, 0);
   lv_obj_set_size(prevButton, 74, 34);
@@ -1054,7 +1082,7 @@ void initUi() {
   lv_label_set_text(prevButtonLabel, "<");
   lv_obj_center(prevButtonLabel);
 
-  playButton = lv_btn_create(card);
+  playButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(playButton);
   lv_obj_add_style(playButton, &styleControl, 0);
   lv_obj_add_style(playButton, &styleControlPrimary, 0);
@@ -1066,7 +1094,7 @@ void initUi() {
   lv_label_set_text(playButtonLabel, "Play");
   lv_obj_center(playButtonLabel);
 
-  nextButton = lv_btn_create(card);
+  nextButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(nextButton);
   lv_obj_add_style(nextButton, &styleControl, 0);
   lv_obj_set_size(nextButton, 74, 34);
@@ -1077,11 +1105,68 @@ void initUi() {
   lv_label_set_text(nextButtonLabel, ">");
   lv_obj_center(nextButtonLabel);
 
-  detailLabel = makeLabel(card, &styleMuted);
+  detailLabel = makeLabel(mainView, &styleMuted);
   lv_obj_set_width(detailLabel, 276);
   lv_label_set_long_mode(detailLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_label_set_text(detailLabel, "Starting display");
   lv_obj_align(detailLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+  volumeView = lv_obj_create(card);
+  lv_obj_remove_style_all(volumeView);
+  lv_obj_set_size(volumeView, 276, 190);
+  lv_obj_align(volumeView, LV_ALIGN_TOP_LEFT, 0, 34);
+  lv_obj_add_flag(volumeView, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *volumeTile = lv_obj_create(volumeView);
+  lv_obj_remove_style_all(volumeTile);
+  lv_obj_add_style(volumeTile, &styleHero, 0);
+  lv_obj_set_size(volumeTile, 276, 142);
+  lv_obj_align(volumeTile, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  lv_obj_t *volumeTitleLabel = lv_label_create(volumeTile);
+  lv_obj_add_style(volumeTitleLabel, &styleTitle, 0);
+  lv_obj_set_style_text_color(volumeTitleLabel, lv_color_hex(0xffd166), 0);
+  lv_label_set_text(volumeTitleLabel, "Volume");
+  lv_obj_align(volumeTitleLabel, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  volumeLabel = lv_label_create(volumeTile);
+  lv_obj_add_style(volumeLabel, &styleTitle, 0);
+  lv_obj_set_width(volumeLabel, 120);
+  lv_label_set_text(volumeLabel, "Vol 35%");
+  lv_obj_align(volumeLabel, LV_ALIGN_CENTER, 0, -2);
+
+  volumeDownButton = lv_btn_create(volumeTile);
+  lv_obj_remove_style_all(volumeDownButton);
+  lv_obj_add_style(volumeDownButton, &styleControl, 0);
+  lv_obj_set_size(volumeDownButton, 56, 42);
+  lv_obj_align(volumeDownButton, LV_ALIGN_LEFT_MID, 6, 20);
+  lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
+
+  volumeDownButtonLabel = lv_label_create(volumeDownButton);
+  lv_label_set_text(volumeDownButtonLabel, "-");
+  lv_obj_center(volumeDownButtonLabel);
+
+  volumeUpButton = lv_btn_create(volumeTile);
+  lv_obj_remove_style_all(volumeUpButton);
+  lv_obj_add_style(volumeUpButton, &styleControl, 0);
+  lv_obj_set_size(volumeUpButton, 56, 42);
+  lv_obj_align(volumeUpButton, LV_ALIGN_RIGHT_MID, -6, 20);
+  lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
+
+  volumeUpButtonLabel = lv_label_create(volumeUpButton);
+  lv_label_set_text(volumeUpButtonLabel, "+");
+  lv_obj_center(volumeUpButtonLabel);
+
+  backButton = lv_btn_create(volumeView);
+  lv_obj_remove_style_all(backButton);
+  lv_obj_add_style(backButton, &styleControl, 0);
+  lv_obj_set_size(backButton, 86, 34);
+  lv_obj_align(backButton, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_add_event_cb(backButton, onBackClicked, LV_EVENT_CLICKED, nullptr);
+
+  backButtonLabel = lv_label_create(backButton);
+  lv_label_set_text(backButtonLabel, LV_SYMBOL_LEFT " Back");
+  lv_obj_center(backButtonLabel);
 
   updateStationUi();
   renderNow();
@@ -1260,7 +1345,9 @@ void updateConnectionUi() {
   }
 
   if (radioStreaming) {
-    lv_label_set_text(stateLabel, "Playing");
+    if (stateLabel) {
+      lv_label_set_text(stateLabel, "Playing");
+    }
     setDotColor(lv_color_hex(0x57cc99));
     setProgress(100);
     updateStationUi();
