@@ -78,8 +78,6 @@ uint32_t nextTouchDiagnosticMs = 0;
 lv_obj_t *statusDot = nullptr;
 lv_obj_t *titleLabel = nullptr;
 lv_obj_t *stateLabel = nullptr;
-lv_obj_t *ssidLabel = nullptr;
-lv_obj_t *bssidLabel = nullptr;
 lv_obj_t *detailLabel = nullptr;
 
 lv_style_t styleScreen;
@@ -621,14 +619,12 @@ void setMetric(lv_obj_t *label, const char *name, int32_t value) {
 
 void updateStationUi() {
   const Station &station = kStations[selectedStation];
-  lv_label_set_text_fmt(ssidLabel, "Now: %s", station.name);
-  lv_label_set_text_fmt(bssidLabel, "%s | %s", station.codec, station.tagline);
   lv_label_set_text(stationNameLabel, station.name);
   lv_label_set_text(stationTaglineLabel, station.tagline);
   lv_label_set_text(stationCodecLabel, station.codec);
   lv_label_set_text_fmt(stationIndexLabel, "%u / %u", selectedStation + 1, kStationCount);
-  lv_label_set_text(playButtonLabel, isPlaying ? "Pause" : "Play");
-  lv_label_set_text(detailLabel, isPlaying ? "Playing audio preview" : "Selected stream ready");
+  lv_label_set_text(playButtonLabel, isPlaying ? "Stop" : "Test");
+  lv_label_set_text(detailLabel, isPlaying ? "Running I2S tone test" : "Stream playback pending");
 }
 
 void selectStation(uint8_t index) {
@@ -826,19 +822,11 @@ void initUi() {
   lv_label_set_text(stateLabel, "Booting");
   lv_obj_align(stateLabel, LV_ALIGN_TOP_RIGHT, 0, 2);
 
-  ssidLabel = makeLabel(card, &styleValue);
-  lv_label_set_text(ssidLabel, "Now: KEXP");
-  lv_obj_align(ssidLabel, LV_ALIGN_TOP_LEFT, 0, 30);
-
-  bssidLabel = makeLabel(card, &styleMuted);
-  lv_label_set_text(bssidLabel, "AAC 160k | Seattle music discovery");
-  lv_obj_align(bssidLabel, LV_ALIGN_TOP_LEFT, 0, 50);
-
   stationTile = lv_obj_create(card);
   lv_obj_remove_style_all(stationTile);
   lv_obj_add_style(stationTile, &styleHero, 0);
-  lv_obj_set_size(stationTile, 276, 94);
-  lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 74);
+  lv_obj_set_size(stationTile, 276, 126);
+  lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 34);
 
   stationIndexLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationIndexLabel, &styleMuted, 0);
@@ -848,21 +836,21 @@ void initUi() {
   stationNameLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationNameLabel, &styleTitle, 0);
   lv_label_set_long_mode(stationNameLabel, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(stationNameLabel, 178);
+  lv_obj_set_width(stationNameLabel, 184);
   lv_label_set_text(stationNameLabel, "KEXP");
   lv_obj_align(stationNameLabel, LV_ALIGN_TOP_LEFT, 0, 0);
 
   stationCodecLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationCodecLabel, &styleStationText, 0);
   lv_label_set_text(stationCodecLabel, "AAC 160k");
-  lv_obj_align(stationCodecLabel, LV_ALIGN_TOP_LEFT, 0, 34);
+  lv_obj_align(stationCodecLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
   stationTaglineLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationTaglineLabel, &styleMuted, 0);
   lv_label_set_long_mode(stationTaglineLabel, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(stationTaglineLabel, 248);
   lv_label_set_text(stationTaglineLabel, "Seattle music discovery");
-  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 58);
+  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 42);
 
   prevButton = lv_btn_create(card);
   lv_obj_remove_style_all(prevButton);
@@ -884,7 +872,7 @@ void initUi() {
   lv_obj_add_event_cb(playButton, onPlayClicked, LV_EVENT_CLICKED, nullptr);
 
   playButtonLabel = lv_label_create(playButton);
-  lv_label_set_text(playButtonLabel, "Play");
+  lv_label_set_text(playButtonLabel, "Test");
   lv_obj_center(playButtonLabel);
 
   nextButton = lv_btn_create(card);
