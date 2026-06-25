@@ -140,11 +140,11 @@ struct Station {
 };
 
 const Station kStations[] = {
-    {"Radio Swiss Jazz", "Commercial-free jazz", "MP3 128k", "http://stream.srg-ssr.ch/m/rsj/mp3_128"},
-    {"SomaFM Groove Salad", "Downtempo ambient", "MP3 128k", "https://ice5.somafm.com/groovesalad-128-mp3"},
-    {"Radio Paradise", "Eclectic human-curated mix", "MP3", "https://stream.radioparadise.com/mp3-128"},
-    {"France Musique", "Classical and culture", "MP3", "http://icecast.radiofrance.fr/francemusique-midfi.mp3"},
-    {"SomaFM Live", "Independent live sets", "MP3 128k", "http://ice5.somafm.com/live-128-mp3"},
+    {"LAist 89.3", "LA news and NPR", "MP3 128k", "https://live.amperwave.net/direct/southerncalipr-kpccfmmp3-imc.mp3?source=kpcc"},
+    {"KUSC 91.5", "USC classical radio", "MP3 256k", "https://playerservices.streamtheworld.com/api/livestream-redirect/KUSCMP256.mp3"},
+    {"KCRW 89.9", "Santa Monica public radio", "MP3 192k", "https://streams.kcrw.com/kcrw_mp3"},
+    {"KJAZZ 88.1", "Long Beach jazz", "MP3 128k", "https://streaming.live365.com/a49833"},
+    {"KXLU 88.9", "LMU independent radio", "MP3 320k", "http://kxlu.streamguys1.com/kxlu-hi"},
 };
 
 constexpr uint8_t kStationCount = sizeof(kStations) / sizeof(kStations[0]);
