@@ -1017,6 +1017,7 @@ void initUi() {
   lv_obj_add_style(card, &styleCard, 0);
   lv_obj_set_size(card, 304, 224);
   lv_obj_center(card);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
   statusDot = lv_obj_create(card);
   lv_obj_remove_style_all(statusDot);
@@ -1041,14 +1042,16 @@ void initUi() {
 
   mainView = lv_obj_create(card);
   lv_obj_remove_style_all(mainView);
-  lv_obj_set_size(mainView, 276, 190);
-  lv_obj_align(mainView, LV_ALIGN_TOP_LEFT, 0, 34);
+  lv_obj_set_size(mainView, 276, 176);
+  lv_obj_align(mainView, LV_ALIGN_TOP_LEFT, 0, 30);
+  lv_obj_clear_flag(mainView, LV_OBJ_FLAG_SCROLLABLE);
 
   stationTile = lv_obj_create(mainView);
   lv_obj_remove_style_all(stationTile);
   lv_obj_add_style(stationTile, &styleHero, 0);
-  lv_obj_set_size(stationTile, 276, 78);
+  lv_obj_set_size(stationTile, 276, 72);
   lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_clear_flag(stationTile, LV_OBJ_FLAG_SCROLLABLE);
 
   stationIndexLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationIndexLabel, &styleMuted, 0);
@@ -1069,13 +1072,13 @@ void initUi() {
   lv_label_set_long_mode(stationTaglineLabel, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(stationTaglineLabel, 248);
   lv_label_set_text(stationTaglineLabel, "Commercial-free jazz");
-  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 30);
+  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 26);
 
   prevButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(prevButton);
   lv_obj_add_style(prevButton, &styleControl, 0);
   lv_obj_set_size(prevButton, 74, 34);
-  lv_obj_align(prevButton, LV_ALIGN_BOTTOM_LEFT, 0, -24);
+  lv_obj_align(prevButton, LV_ALIGN_TOP_LEFT, 0, 88);
   lv_obj_add_event_cb(prevButton, onPrevClicked, LV_EVENT_CLICKED, nullptr);
 
   prevButtonLabel = lv_label_create(prevButton);
@@ -1087,7 +1090,7 @@ void initUi() {
   lv_obj_add_style(playButton, &styleControl, 0);
   lv_obj_add_style(playButton, &styleControlPrimary, 0);
   lv_obj_set_size(playButton, 112, 34);
-  lv_obj_align(playButton, LV_ALIGN_BOTTOM_MID, 0, -24);
+  lv_obj_align(playButton, LV_ALIGN_TOP_MID, 0, 88);
   lv_obj_add_event_cb(playButton, onPlayClicked, LV_EVENT_CLICKED, nullptr);
 
   playButtonLabel = lv_label_create(playButton);
@@ -1098,7 +1101,7 @@ void initUi() {
   lv_obj_remove_style_all(nextButton);
   lv_obj_add_style(nextButton, &styleControl, 0);
   lv_obj_set_size(nextButton, 74, 34);
-  lv_obj_align(nextButton, LV_ALIGN_BOTTOM_RIGHT, 0, -24);
+  lv_obj_align(nextButton, LV_ALIGN_TOP_RIGHT, 0, 88);
   lv_obj_add_event_cb(nextButton, onNextClicked, LV_EVENT_CLICKED, nullptr);
 
   nextButtonLabel = lv_label_create(nextButton);
@@ -1109,7 +1112,7 @@ void initUi() {
   lv_obj_set_width(detailLabel, 276);
   lv_label_set_long_mode(detailLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_label_set_text(detailLabel, "Starting display");
-  lv_obj_align(detailLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_align(detailLabel, LV_ALIGN_TOP_LEFT, 0, 140);
 
   volumeView = lv_obj_create(card);
   lv_obj_remove_style_all(volumeView);
