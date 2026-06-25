@@ -99,26 +99,29 @@ Use the same audio hardware as `..\ava-and-work\hardware.md`:
 - amplifier: `MAX98357` / `MAX98357A` I2S 3 W Class D amplifier breakout
 - speaker: 3 W, 8 ohm mini speaker
 
-Provisional ESP32-C5 CYD to MAX98357A wiring:
+Confirmed ESP32-C5 CYD to MAX98357A wiring:
 
 | MAX98357A pin | ESP32-C5 CYD signal | ESP32-C5 GPIO / source | Notes |
 | --- | --- | --- | --- |
-| `BCLK` | I2S bit clock | `IO8` | Candidate pin on `CN1` pin 3 and `P1` pin 2. |
-| `LRC` / `LRCLK` / `WS` | I2S word select | `IO9` | Candidate pin on `CN1` pin 2. |
-| `DIN` | I2S audio data from ESP32 | `IO26` | Candidate pin on `P1` pin 3. |
+| `BCLK` | I2S bit clock | `IO8` | Current firmware diagnostic includes this as the primary clock candidate. |
+| `LRC` / `LRCLK` / `WS` | I2S word select | `IO9` | Current firmware diagnostic includes this as the primary word-select candidate. |
+| `DIN` | I2S audio data from ESP32 | `IO26` | Data from ESP32-C5 to MAX98357A. |
+| `GAIN` | Amp gain select | leave open | Default gain is acceptable for bring-up. Revisit only if output is too quiet/loud after stream playback works. |
+| `SD` | Amp shutdown / mode control | `3.3V` | Must be enabled. Connecting `SD` to 3.3 V made the I2S diagnostic beeps audible. Prefer a pull-up resistor, roughly 100 kOhm to 1 MOhm, for the final build. |
 | `GND` | Ground | `GND` | Must share ground with the ESP32-C5 board. |
-| `VIN` / `VCC` | Amp power | Prefer `5V` if available | 5 V gives the 3 W amp more headroom; logic pins remain 3.3 V GPIO signals. |
+| `VIN` / `VCC` | Amp power | `5V` | 5 V gives the 3 W amp more headroom; I2S and `SD` logic remain 3.3 V. |
 | Speaker `+` | Speaker positive output | MAX98357A output only | Do not connect to ESP32 pins. |
 | Speaker `-` | Speaker negative output | MAX98357A output only | Do not connect to ESP32 ground. |
 
 Current firmware audio diagnostic:
 
 - Boot and Play run a 20% volume I2S tone sweep across three GPIO maps.
+- With `SD` tied to 3.3 V, the amp powered on and the diagnostic produced two low tone beeps. This confirms the MAX98357A was previously likely disabled or floating.
 - Listen for which on-screen/serial label produces sound:
   - `Dev note IO8/IO9/IO26`: `BCLK=IO8`, `LRC=IO9`, `DIN=IO26`
   - `P1 header IO8/IO4/IO26`: `BCLK=IO8`, `LRC=IO4`, `DIN=IO26`
   - `Clock swap IO9/IO8/IO26`: `BCLK=IO9`, `LRC=IO8`, `DIN=IO26`
-- If none of the three maps produces sound, check MAX98357A `VIN`, `GND`, optional `SD` shutdown pin, and speaker output terminals before changing stream-decoder code.
+- If the diagnostic becomes silent again, check MAX98357A `VIN`, `GND`, `SD`, and speaker output terminals before changing stream-decoder code.
 
 Safety notes:
 

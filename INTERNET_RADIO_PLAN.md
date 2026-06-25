@@ -319,7 +319,7 @@ Fallback path:
 - start with MP3 only using a known decoder path
 - keep LVGL/touch update frequency low during playback
 
-## Provisional I2S Pins
+## Confirmed I2S Audio Wiring
 
 Do not use the shared display/touch/SD SPI bus pins unless absolutely necessary:
 
@@ -334,23 +334,26 @@ Do not use the shared display/touch/SD SPI bus pins unless absolutely necessary:
 | Backlight | `IO25` |
 | WS2812 | `IO27` |
 
-Candidate exposed pins for audio:
+Current MAX98357A wiring used for bring-up:
 
-| I2S signal | Candidate GPIO |
-| --- | --- |
-| BCLK | `IO8` |
-| LRCLK/WS | `IO9` |
-| DOUT/DIN to amp | `IO26` |
+| MAX98357A pin | ESP32-C5 CYD connection | Notes |
+| --- | --- | --- |
+| `BCLK` | `IO8` | I2S bit clock. |
+| `LRC` / `LRCLK` / `WS` | `IO9` | I2S word select. |
+| `DIN` | `IO26` | I2S data from ESP32-C5 to amp. |
+| `GAIN` | leave open | Default gain for initial testing. |
+| `SD` | `3.3V` | Required to enable the amp. `SD -> 3.3V` produced audible diagnostic beeps; use a pull-up resistor for final wiring if available. |
+| `GND` | `GND` | Common ground with ESP32-C5. |
+| `VIN` | `5V` | Speaker amp power. Keep logic pins at 3.3 V. |
+| Speaker `+` / `-` | MAX98357A speaker output pads only | Do not connect either speaker lead to ESP32 ground. |
 
-Alternate candidates if the physical header layout is easier:
+Firmware diagnostic alternates still present until the final map is locked:
 
-- `IO4`
-- `IO5`
-- `IO8`
-- `IO9`
-- `IO26`
+- `BCLK=IO8`, `LRC=IO9`, `DIN=IO26`
+- `BCLK=IO8`, `LRC=IO4`, `DIN=IO26`
+- `BCLK=IO9`, `LRC=IO8`, `DIN=IO26`
 
-Final pin choice should wait until the amp/DAC module is connected and the board headers are confirmed with a meter or the vendor schematic.
+The first confirmed audible result was two low diagnostic beeps after tying MAX98357A `SD` to 3.3 V.
 
 ## Hardware Bring-Up Checklist
 
@@ -365,7 +368,8 @@ When the amp arrives:
 
 - wire GND common between board and amp
 - wire I2S BCLK, LRCLK/WS, and DATA
-- wire amp `VIN`/`VCC`; prefer 5 V if available for speaker headroom, while keeping I2S logic at 3.3 V GPIO levels
+- wire amp `VIN`/`VCC` to 5 V for speaker headroom, while keeping I2S logic at 3.3 V GPIO levels
+- wire MAX98357A `SD` to 3.3 V, preferably through a 100 kOhm to 1 MOhm pull-up resistor, so the amp is not in shutdown
 - keep speaker volume low for first boot
 - run a generated sine-wave I2S test before streaming radio
 
