@@ -99,6 +99,8 @@ lv_style_t styleStationSelectedText;
 lv_style_t styleHero;
 lv_style_t styleControl;
 lv_style_t styleControlPrimary;
+lv_style_t styleControlPending;
+lv_style_t styleControlPlaying;
 
 i2s_chan_handle_t audioTxChannel = nullptr;
 bool audioReady = false;
@@ -122,6 +124,12 @@ uint32_t radioLastBytesAtMs = 0;
 uint32_t radioLastStatusAtMs = 0;
 uint32_t radioCopiedBytes = 0;
 bool radioPlaybackConfirmed = false;
+
+enum class PlayVisualState {
+  Idle,
+  Pending,
+  Playing,
+};
 
 struct AudioPinProfile {
   const char *name;
@@ -373,6 +381,31 @@ void setDotColor(lv_color_t color) {
   lv_obj_report_style_change(&styleDot);
 }
 
+void setPlayButtonVisual(PlayVisualState state) {
+  if (!playButton) {
+    return;
+  }
+
+  lv_obj_remove_style(playButton, &styleControlPrimary, 0);
+  lv_obj_remove_style(playButton, &styleControlPending, 0);
+  lv_obj_remove_style(playButton, &styleControlPlaying, 0);
+
+  switch (state) {
+    case PlayVisualState::Pending:
+      lv_obj_add_style(playButton, &styleControlPending, 0);
+      break;
+    case PlayVisualState::Playing:
+      lv_obj_add_style(playButton, &styleControlPlaying, 0);
+      break;
+    case PlayVisualState::Idle:
+    default:
+      lv_obj_add_style(playButton, &styleControlPrimary, 0);
+      break;
+  }
+
+  lv_obj_invalidate(playButton);
+}
+
 void setProgress(int value) {
   (void)value;
 }
@@ -395,6 +428,11 @@ void setStreamStatus(const char *state, const Station &station, lv_color_t dotCo
     lv_label_set_text(stateLabel, state);
   }
   setDotColor(dotColor);
+  if (strcmp(state, "Playing") == 0) {
+    setPlayButtonVisual(PlayVisualState::Playing);
+  } else if (strcmp(state, "Connecting") == 0 || strcmp(state, "Opening") == 0 || strcmp(state, "Buffering") == 0) {
+    setPlayButtonVisual(PlayVisualState::Pending);
+  }
   renderNow();
 }
 
@@ -885,6 +923,11 @@ void updateStationUi() {
   lv_label_set_text_fmt(stationIndexLabel, "%u / %u", selectedStation + 1, kStationCount);
   lv_label_set_text(playButtonLabel, radioStreaming ? "Stop" : "Play");
   refreshVolumeUi();
+  if (radioStreaming) {
+    setPlayButtonVisual(radioPlaybackConfirmed ? PlayVisualState::Playing : PlayVisualState::Pending);
+  } else {
+    setPlayButtonVisual(PlayVisualState::Idle);
+  }
   if (!radioStreaming) {
     lv_label_set_text(detailLabel, "Ready to stream");
   }
@@ -925,6 +968,7 @@ void togglePlay() {
     isPlaying = false;
   } else {
     isPlaying = true;
+    setPlayButtonVisual(PlayVisualState::Pending);
     if (stateLabel) {
       lv_label_set_text(stateLabel, "Opening");
     }
@@ -934,6 +978,7 @@ void togglePlay() {
 
     if (!startRadioStream()) {
       isPlaying = false;
+      setPlayButtonVisual(PlayVisualState::Idle);
     }
   }
 
@@ -1089,6 +1134,14 @@ void initUi() {
   lv_style_init(&styleControlPrimary);
   lv_style_set_bg_color(&styleControlPrimary, lv_color_hex(0x1f6f8b));
   lv_style_set_border_color(&styleControlPrimary, lv_color_hex(0x56cfe1));
+
+  lv_style_init(&styleControlPending);
+  lv_style_set_bg_color(&styleControlPending, lv_color_hex(0xa86d16));
+  lv_style_set_border_color(&styleControlPending, lv_color_hex(0xffc857));
+
+  lv_style_init(&styleControlPlaying);
+  lv_style_set_bg_color(&styleControlPlaying, lv_color_hex(0x208451));
+  lv_style_set_border_color(&styleControlPlaying, lv_color_hex(0x57cc99));
 
   lv_obj_t *screen = lv_scr_act();
   lv_obj_add_style(screen, &styleScreen, 0);
