@@ -52,7 +52,6 @@ constexpr int8_t kSdCs = 10;
 constexpr uint32_t kAudioSampleRate = 44100;
 constexpr uint32_t kAudioToneHz = 880;
 constexpr uint8_t kAudioVolumePercent = 35;
-constexpr float kRadioVolume = static_cast<float>(kAudioVolumePercent) / 100.0f;
 constexpr int16_t kAudioTonePeakAmplitude = 12000;
 constexpr int16_t kAudioToneAmplitude = (kAudioTonePeakAmplitude * kAudioVolumePercent) / 100;
 constexpr size_t kAudioFramesPerBuffer = 512;
@@ -113,6 +112,7 @@ EncodedAudioStream radioDecoder(&radioVolume, new MP3DecoderHelix());
 StreamCopy radioCopier(radioDecoder, radioStream);
 bool radioAudioReady = false;
 bool radioStreaming = false;
+uint8_t currentVolumePercent = kAudioVolumePercent;
 
 struct AudioPinProfile {
   const char *name;
@@ -151,14 +151,18 @@ bool isPlaying = false;
 lv_obj_t *stationTile = nullptr;
 lv_obj_t *stationNameLabel = nullptr;
 lv_obj_t *stationTaglineLabel = nullptr;
-lv_obj_t *stationCodecLabel = nullptr;
 lv_obj_t *stationIndexLabel = nullptr;
 lv_obj_t *prevButton = nullptr;
 lv_obj_t *playButton = nullptr;
 lv_obj_t *nextButton = nullptr;
+lv_obj_t *volumeDownButton = nullptr;
+lv_obj_t *volumeUpButton = nullptr;
+lv_obj_t *volumeLabel = nullptr;
 lv_obj_t *prevButtonLabel = nullptr;
 lv_obj_t *playButtonLabel = nullptr;
 lv_obj_t *nextButtonLabel = nullptr;
+lv_obj_t *volumeDownButtonLabel = nullptr;
+lv_obj_t *volumeUpButtonLabel = nullptr;
 
 struct CandidateAp {
   int index = -1;
@@ -383,6 +387,31 @@ bool checkEsp(esp_err_t result, const char *step) {
   return false;
 }
 
+float currentRadioVolume() {
+  return static_cast<float>(currentVolumePercent) / 100.0f;
+}
+
+void refreshVolumeUi() {
+  if (volumeLabel) {
+    lv_label_set_text_fmt(volumeLabel, "Vol %u%%", currentVolumePercent);
+  }
+}
+
+void setRadioVolumePercent(uint8_t percent) {
+  currentVolumePercent = constrain(percent, 0, 100);
+  radioVolume.setVolume(currentRadioVolume());
+  refreshVolumeUi();
+  Serial.print("Volume: ");
+  Serial.print(currentVolumePercent);
+  Serial.println("%");
+  renderNow();
+}
+
+void adjustRadioVolume(int8_t deltaPercent) {
+  const int next = static_cast<int>(currentVolumePercent) + deltaPercent;
+  setRadioVolumePercent(static_cast<uint8_t>(constrain(next, 0, 100)));
+}
+
 void onRadioMetadata(MetaDataType type, const char *text, int length) {
   if (type != MetaDataType::Title || !text || length <= 0) {
     return;
@@ -432,7 +461,7 @@ bool beginRadioAudio() {
   }
 
   radioVolume.begin(radioI2sConfig);
-  radioVolume.setVolume(kRadioVolume);
+  radioVolume.setVolume(currentRadioVolume());
   radioDecoder.begin();
   radioAudioReady = true;
   return true;
@@ -736,10 +765,12 @@ void updateStationUi() {
   const Station &station = kStations[selectedStation];
   lv_label_set_text(stationNameLabel, station.name);
   lv_label_set_text(stationTaglineLabel, station.tagline);
-  lv_label_set_text(stationCodecLabel, station.codec);
   lv_label_set_text_fmt(stationIndexLabel, "%u / %u", selectedStation + 1, kStationCount);
   lv_label_set_text(playButtonLabel, radioStreaming ? "Stop" : "Play");
-  lv_label_set_text(detailLabel, radioStreaming ? "Streaming MP3" : "Ready to stream MP3");
+  refreshVolumeUi();
+  if (!radioStreaming) {
+    lv_label_set_text(detailLabel, "Ready to stream");
+  }
 }
 
 void selectStation(uint8_t index) {
@@ -806,6 +837,16 @@ void onPlayClicked(lv_event_t *event) {
 void onNextClicked(lv_event_t *event) {
   (void)event;
   selectRelativeStation(1);
+}
+
+void onVolumeDownClicked(lv_event_t *event) {
+  (void)event;
+  adjustRadioVolume(-5);
+}
+
+void onVolumeUpClicked(lv_event_t *event) {
+  (void)event;
+  adjustRadioVolume(5);
 }
 
 void initDisplay() {
@@ -950,7 +991,7 @@ void initUi() {
   stationTile = lv_obj_create(card);
   lv_obj_remove_style_all(stationTile);
   lv_obj_add_style(stationTile, &styleHero, 0);
-  lv_obj_set_size(stationTile, 276, 126);
+  lv_obj_set_size(stationTile, 276, 88);
   lv_obj_align(stationTile, LV_ALIGN_TOP_LEFT, 0, 34);
 
   stationIndexLabel = lv_label_create(stationTile);
@@ -960,22 +1001,47 @@ void initUi() {
 
   stationNameLabel = lv_label_create(stationTile);
   lv_obj_add_style(stationNameLabel, &styleTitle, 0);
+  lv_obj_set_style_text_color(stationNameLabel, lv_color_hex(0xffd166), 0);
   lv_label_set_long_mode(stationNameLabel, LV_LABEL_LONG_DOT);
   lv_obj_set_width(stationNameLabel, 184);
-  lv_label_set_text(stationNameLabel, "KEXP");
+  lv_label_set_text(stationNameLabel, "Radio Swiss Jazz");
   lv_obj_align(stationNameLabel, LV_ALIGN_TOP_LEFT, 0, 0);
 
-  stationCodecLabel = lv_label_create(stationTile);
-  lv_obj_add_style(stationCodecLabel, &styleStationText, 0);
-  lv_label_set_text(stationCodecLabel, "AAC 160k");
-  lv_obj_align(stationCodecLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-
   stationTaglineLabel = lv_label_create(stationTile);
-  lv_obj_add_style(stationTaglineLabel, &styleMuted, 0);
+  lv_obj_add_style(stationTaglineLabel, &styleStationText, 0);
+  lv_obj_set_style_text_color(stationTaglineLabel, lv_color_hex(0x7ee7d8), 0);
   lv_label_set_long_mode(stationTaglineLabel, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(stationTaglineLabel, 248);
-  lv_label_set_text(stationTaglineLabel, "Seattle music discovery");
-  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 42);
+  lv_label_set_text(stationTaglineLabel, "Commercial-free jazz");
+  lv_obj_align(stationTaglineLabel, LV_ALIGN_TOP_LEFT, 0, 30);
+
+  volumeDownButton = lv_btn_create(card);
+  lv_obj_remove_style_all(volumeDownButton);
+  lv_obj_add_style(volumeDownButton, &styleControl, 0);
+  lv_obj_set_size(volumeDownButton, 42, 28);
+  lv_obj_align(volumeDownButton, LV_ALIGN_TOP_LEFT, 0, 132);
+  lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
+
+  volumeDownButtonLabel = lv_label_create(volumeDownButton);
+  lv_label_set_text(volumeDownButtonLabel, "-");
+  lv_obj_center(volumeDownButtonLabel);
+
+  volumeLabel = lv_label_create(card);
+  lv_obj_add_style(volumeLabel, &styleValue, 0);
+  lv_obj_set_width(volumeLabel, 92);
+  lv_label_set_text(volumeLabel, "Vol 35%");
+  lv_obj_align(volumeLabel, LV_ALIGN_TOP_MID, 0, 136);
+
+  volumeUpButton = lv_btn_create(card);
+  lv_obj_remove_style_all(volumeUpButton);
+  lv_obj_add_style(volumeUpButton, &styleControl, 0);
+  lv_obj_set_size(volumeUpButton, 42, 28);
+  lv_obj_align(volumeUpButton, LV_ALIGN_TOP_RIGHT, 0, 132);
+  lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
+
+  volumeUpButtonLabel = lv_label_create(volumeUpButton);
+  lv_label_set_text(volumeUpButtonLabel, "+");
+  lv_obj_center(volumeUpButtonLabel);
 
   prevButton = lv_btn_create(card);
   lv_obj_remove_style_all(prevButton);
@@ -1013,7 +1079,7 @@ void initUi() {
 
   detailLabel = makeLabel(card, &styleMuted);
   lv_obj_set_width(detailLabel, 276);
-  lv_label_set_long_mode(detailLabel, LV_LABEL_LONG_DOT);
+  lv_label_set_long_mode(detailLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);
   lv_label_set_text(detailLabel, "Starting display");
   lv_obj_align(detailLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
@@ -1190,6 +1256,15 @@ void updateConnectionUi() {
   if (WiFi.status() != WL_CONNECTED) {
     setStatus("Offline", "Station list ready", lv_color_hex(0xff5a5f), 18);
     updateStationUi();
+    return;
+  }
+
+  if (radioStreaming) {
+    lv_label_set_text(stateLabel, "Playing");
+    setDotColor(lv_color_hex(0x57cc99));
+    setProgress(100);
+    updateStationUi();
+    renderNow();
     return;
   }
 
