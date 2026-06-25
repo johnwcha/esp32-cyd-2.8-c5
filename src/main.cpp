@@ -3,6 +3,7 @@
 #include <AudioTools.h>
 #include <AudioTools/AudioCodecs/CodecMP3Helix.h>
 #include <AudioTools/Communication/HTTP/ICYStream.h>
+#include <HTTPClient.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <driver/i2s_std.h>
@@ -115,6 +116,7 @@ StreamCopy radioCopier(radioDecoder, radioStream);
 bool radioAudioReady = false;
 bool radioStreaming = false;
 uint8_t currentVolumePercent = kAudioVolumePercent;
+String activeStreamUrl;
 
 struct AudioPinProfile {
   const char *name;
@@ -140,10 +142,10 @@ struct Station {
 };
 
 const Station kStations[] = {
-    {"LAist 89.3", "LA news and NPR", "MP3 128k", "https://live.amperwave.net/direct/southerncalipr-kpccfmmp3-imc.mp3?source=kpcc"},
-    {"KUSC 91.5", "USC classical radio", "MP3 256k", "https://playerservices.streamtheworld.com/api/livestream-redirect/KUSCMP256.mp3"},
-    {"KCRW 89.9", "Santa Monica public radio", "MP3 192k", "https://streams.kcrw.com/kcrw_mp3"},
-    {"KJAZZ 88.1", "Long Beach jazz", "MP3 128k", "https://streaming.live365.com/a49833"},
+    {"LAist 89.3", "LA news and NPR", "MP3 128k", "http://live.amperwave.net/direct/southerncalipr-kpccfmmp3-imc.mp3?source=kpcc"},
+    {"KUSC 91.5", "USC classical radio", "MP3 96k", "http://playerservices.streamtheworld.com/api/livestream-redirect/KUSCMP96.mp3"},
+    {"KCRW 89.9", "Santa Monica public radio", "MP3 192k", "http://streams.kcrw.com/kcrw_mp3"},
+    {"KJAZZ 88.1", "Long Beach jazz", "MP3 128k", "http://streaming.live365.com/a49833"},
     {"KXLU 88.9", "LMU independent radio", "MP3 320k", "http://kxlu.streamguys1.com/kxlu-hi"},
 };
 
@@ -507,6 +509,56 @@ void stopRadioStream() {
   radioAudioReady = false;
 }
 
+String resolveStreamUrl(const char *url) {
+  String currentUrl(url);
+
+  for (uint8_t i = 0; i < 4; ++i) {
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+
+    if (!http.begin(currentUrl)) {
+      Serial.print("Redirect probe could not open: ");
+      Serial.println(currentUrl);
+      return currentUrl;
+    }
+
+    const int code = http.sendRequest("HEAD");
+    const String location = http.getLocation();
+    http.end();
+
+    Serial.print("Redirect probe ");
+    Serial.print(code);
+    Serial.print(": ");
+    Serial.println(currentUrl);
+
+    if (code == HTTP_CODE_OK) {
+      return currentUrl;
+    }
+
+    if ((code == HTTP_CODE_MOVED_PERMANENTLY || code == HTTP_CODE_FOUND || code == HTTP_CODE_TEMPORARY_REDIRECT ||
+         code == HTTP_CODE_PERMANENT_REDIRECT) &&
+        location.length() > 0) {
+      if (location.startsWith("http://")) {
+        currentUrl = location;
+      } else if (location.startsWith("/")) {
+        const int schemeEnd = currentUrl.indexOf("://");
+        const int hostStart = schemeEnd >= 0 ? schemeEnd + 3 : 0;
+        const int pathStart = currentUrl.indexOf('/', hostStart);
+        currentUrl = pathStart >= 0 ? currentUrl.substring(0, pathStart) + location : currentUrl + location;
+      } else {
+        currentUrl = location;
+      }
+      continue;
+    }
+
+    return currentUrl;
+  }
+
+  return currentUrl;
+}
+
 bool startRadioStream() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Cannot start stream: Wi-Fi is not connected.");
@@ -526,8 +578,18 @@ bool startRadioStream() {
   Serial.print(" -> ");
   Serial.println(station.url);
 
+  activeStreamUrl = resolveStreamUrl(station.url);
+  Serial.print("Resolved MP3 stream: ");
+  Serial.println(activeStreamUrl);
+
   setStatus("Opening", station.name, lv_color_hex(0xffc857), 72);
-  radioStream.begin(station.url, "audio/mp3");
+  if (!radioStream.begin(activeStreamUrl.c_str(), "audio/mp3")) {
+    Serial.println("Stream open failed.");
+    stopRadioStream();
+    setStatus("Offline", "Stream open failed", lv_color_hex(0xff5a5f), 18);
+    return false;
+  }
+
   radioStreaming = true;
   return true;
 }
