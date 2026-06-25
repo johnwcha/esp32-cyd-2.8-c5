@@ -2,9 +2,29 @@
 #include <Arduino_GFX_Library.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <driver/i2s_std.h>
 #include <lvgl.h>
+#include <math.h>
 
+#if __has_include("secrets.h")
 #include "secrets.h"
+#endif
+
+#ifndef WIFI_SSID
+#define WIFI_SSID "Innovation Lab"
+#endif
+
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "replace-me"
+#endif
+
+#ifndef WIFI_FALLBACK_SSID
+#define WIFI_FALLBACK_SSID "TP-Link_ABD8"
+#endif
+
+#ifndef WIFI_FALLBACK_PASSWORD
+#define WIFI_FALLBACK_PASSWORD "28892168"
+#endif
 
 #define Serial Serial0
 
@@ -26,6 +46,15 @@ constexpr int8_t kTftRst = -1;
 constexpr int8_t kTftBacklight = 25;
 constexpr int8_t kTouchCs = 1;
 constexpr int8_t kSdCs = 10;
+constexpr int8_t kI2sBclk = 8;
+constexpr int8_t kI2sLrc = 9;
+constexpr int8_t kI2sDout = 26;
+constexpr uint32_t kAudioSampleRate = 44100;
+constexpr uint32_t kAudioToneHz = 880;
+constexpr int16_t kAudioToneAmplitude = 5000;
+constexpr size_t kAudioFramesPerBuffer = 512;
+constexpr size_t kAudioSineTableSize = 256;
+constexpr uint32_t kAudioPreviewMs = 2000;
 constexpr uint32_t kTouchSpiHz = 2500000;
 constexpr int16_t kTouchRawMinX = 250;
 constexpr int16_t kTouchRawMaxX = 3800;
@@ -67,6 +96,14 @@ lv_style_t styleHero;
 lv_style_t styleControl;
 lv_style_t styleControlPrimary;
 
+i2s_chan_handle_t audioTxChannel = nullptr;
+bool audioReady = false;
+bool audioTonePlaying = false;
+uint32_t audioPhase = 0;
+int16_t audioSineTable[kAudioSineTableSize] = {};
+int16_t audioSampleBuffer[kAudioFramesPerBuffer * 2] = {};
+TaskHandle_t audioTaskHandle = nullptr;
+
 struct Station {
   const char *name;
   const char *tagline;
@@ -102,7 +139,22 @@ struct CandidateAp {
   int32_t rssi = -1000;
   int32_t channel = 0;
   uint8_t bssid[6] = {};
+  const char *ssid = nullptr;
+  const char *password = nullptr;
 };
+
+struct WifiProfile {
+  const char *ssid;
+  const char *password;
+  bool requireFiveGhz;
+};
+
+const WifiProfile kWifiProfiles[] = {
+    {WIFI_SSID, WIFI_PASSWORD, true},
+    {WIFI_FALLBACK_SSID, WIFI_FALLBACK_PASSWORD, false},
+};
+
+constexpr uint8_t kWifiProfileCount = sizeof(kWifiProfiles) / sizeof(kWifiProfiles[0]);
 
 bool isFiveGhzChannel(int32_t channel) {
   return channel > 14;
@@ -284,6 +336,209 @@ void setStatus(const char *state, const char *detail, lv_color_t dotColor, int p
   renderNow();
 }
 
+bool checkEsp(esp_err_t result, const char *step) {
+  if (result == ESP_OK) {
+    return true;
+  }
+
+  Serial.print("I2S ");
+  Serial.print(step);
+  Serial.print(" failed: ");
+  Serial.println(esp_err_to_name(result));
+  return false;
+}
+
+void buildAudioSineTable() {
+  constexpr float kTwoPi = 6.28318530718f;
+
+  for (size_t i = 0; i < kAudioSineTableSize; ++i) {
+    const float phase = (static_cast<float>(i) * kTwoPi) / static_cast<float>(kAudioSineTableSize);
+    audioSineTable[i] = static_cast<int16_t>(sinf(phase) * kAudioToneAmplitude);
+  }
+}
+
+bool initAudioOutput() {
+  if (audioReady) {
+    return true;
+  }
+
+  Serial.println();
+  Serial.println("Initializing MAX98357A I2S output.");
+  Serial.print("BCLK=IO");
+  Serial.print(kI2sBclk);
+  Serial.print(" LRC=IO");
+  Serial.print(kI2sLrc);
+  Serial.print(" DIN=IO");
+  Serial.println(kI2sDout);
+  buildAudioSineTable();
+
+  i2s_chan_config_t channelConfig = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+  channelConfig.dma_desc_num = 4;
+  channelConfig.dma_frame_num = 256;
+
+  if (!checkEsp(i2s_new_channel(&channelConfig, &audioTxChannel, nullptr), "new channel")) {
+    setStatus("Audio", "I2S setup failed", lv_color_hex(0xff5a5f), 12);
+    return false;
+  }
+
+  i2s_std_config_t stdConfig = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kAudioSampleRate),
+      .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+      .gpio_cfg = {
+          .mclk = I2S_GPIO_UNUSED,
+          .bclk = static_cast<gpio_num_t>(kI2sBclk),
+          .ws = static_cast<gpio_num_t>(kI2sLrc),
+          .dout = static_cast<gpio_num_t>(kI2sDout),
+          .din = I2S_GPIO_UNUSED,
+          .invert_flags = {
+              .mclk_inv = false,
+              .bclk_inv = false,
+              .ws_inv = false,
+          },
+      },
+  };
+
+  if (!checkEsp(i2s_channel_init_std_mode(audioTxChannel, &stdConfig), "init std mode")) {
+    i2s_del_channel(audioTxChannel);
+    audioTxChannel = nullptr;
+    setStatus("Audio", "I2S setup failed", lv_color_hex(0xff5a5f), 12);
+    return false;
+  }
+
+  audioReady = true;
+  Serial.println("I2S output ready.");
+  return true;
+}
+
+void fillToneBuffer(int16_t *samples, size_t frameCount) {
+  const uint32_t phaseStep = static_cast<uint32_t>((static_cast<uint64_t>(kAudioToneHz) << 32) / kAudioSampleRate);
+
+  for (size_t frame = 0; frame < frameCount; ++frame) {
+    audioPhase += phaseStep;
+    const uint8_t tableIndex = static_cast<uint8_t>(audioPhase >> 24);
+    const int16_t sample = audioSineTable[tableIndex];
+    samples[frame * 2] = sample;
+    samples[frame * 2 + 1] = sample;
+  }
+}
+
+void audioTask(void *parameter) {
+  (void)parameter;
+
+  for (;;) {
+    if (!audioReady || !audioTonePlaying) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    fillToneBuffer(audioSampleBuffer, kAudioFramesPerBuffer);
+
+    size_t bytesWritten = 0;
+    const esp_err_t writeResult =
+        i2s_channel_write(audioTxChannel, audioSampleBuffer, sizeof(audioSampleBuffer), &bytesWritten, 100);
+    if (writeResult != ESP_OK) {
+      checkEsp(writeResult, "write");
+      audioTonePlaying = false;
+      i2s_channel_disable(audioTxChannel);
+    }
+  }
+}
+
+void ensureAudioTask() {
+  if (audioTaskHandle) {
+    return;
+  }
+
+  xTaskCreate(audioTask, "audio", 4096, nullptr, 3, &audioTaskHandle);
+}
+
+void writeSilence() {
+  memset(audioSampleBuffer, 0, sizeof(audioSampleBuffer));
+  size_t bytesWritten = 0;
+  i2s_channel_write(audioTxChannel, audioSampleBuffer, sizeof(audioSampleBuffer), &bytesWritten, 100);
+}
+
+bool playBlockingTone(uint32_t durationMs) {
+  if (!initAudioOutput()) {
+    return false;
+  }
+
+  if (!checkEsp(i2s_channel_enable(audioTxChannel), "enable")) {
+    return false;
+  }
+
+  audioPhase = 0;
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < durationMs) {
+    fillToneBuffer(audioSampleBuffer, kAudioFramesPerBuffer);
+
+    size_t bytesWritten = 0;
+    const esp_err_t writeResult =
+        i2s_channel_write(audioTxChannel, audioSampleBuffer, sizeof(audioSampleBuffer), &bytesWritten, 1000);
+    if (!checkEsp(writeResult, "write")) {
+      break;
+    }
+
+    renderNow();
+  }
+
+  writeSilence();
+  i2s_channel_disable(audioTxChannel);
+  return true;
+}
+
+bool startAudioTone() {
+  audioTonePlaying = true;
+  Serial.println("Audio preview tone started.");
+  const bool played = playBlockingTone(kAudioPreviewMs);
+  audioTonePlaying = false;
+  Serial.println("Audio preview tone finished.");
+  return played;
+}
+
+bool startContinuousAudioTone() {
+  if (!initAudioOutput()) {
+    return false;
+  }
+
+  if (!audioTonePlaying && !checkEsp(i2s_channel_enable(audioTxChannel), "enable")) {
+    return false;
+  }
+
+  audioTonePlaying = true;
+  audioPhase = 0;
+  ensureAudioTask();
+  Serial.println("Audio continuous preview tone started.");
+  return true;
+}
+
+void stopAudioTone() {
+  if (!audioReady || !audioTonePlaying) {
+    return;
+  }
+
+  audioTonePlaying = false;
+  vTaskDelay(pdMS_TO_TICKS(25));
+  writeSilence();
+  i2s_channel_disable(audioTxChannel);
+  Serial.println("Audio preview tone stopped.");
+}
+
+void pumpAudio() {
+  if (!audioReady || !audioTonePlaying) {
+    return;
+  }
+
+  fillToneBuffer(audioSampleBuffer, kAudioFramesPerBuffer);
+
+  size_t bytesWritten = 0;
+  const esp_err_t writeResult = i2s_channel_write(audioTxChannel, audioSampleBuffer, sizeof(audioSampleBuffer), &bytesWritten, 50);
+  if (writeResult != ESP_OK && writeResult != ESP_ERR_TIMEOUT) {
+    checkEsp(writeResult, "write");
+    stopAudioTone();
+  }
+}
+
 void setMetric(lv_obj_t *label, const char *name, const String &value) {
   lv_label_set_text_fmt(label, "%s: %s", name, value.c_str());
 }
@@ -301,7 +556,7 @@ void updateStationUi() {
   lv_label_set_text(stationCodecLabel, station.codec);
   lv_label_set_text_fmt(stationIndexLabel, "%u / %u", selectedStation + 1, kStationCount);
   lv_label_set_text(playButtonLabel, isPlaying ? "Pause" : "Play");
-  lv_label_set_text(detailLabel, isPlaying ? "Playing preview state" : "Selected stream ready");
+  lv_label_set_text(detailLabel, isPlaying ? "Playing audio preview" : "Selected stream ready");
 }
 
 void selectStation(uint8_t index) {
@@ -324,16 +579,30 @@ void selectStation(uint8_t index) {
 
 void selectRelativeStation(int8_t delta) {
   const int next = (static_cast<int>(selectedStation) + delta + kStationCount) % kStationCount;
+  stopAudioTone();
   isPlaying = false;
   selectStation(static_cast<uint8_t>(next));
 }
 
 void togglePlay() {
-  isPlaying = !isPlaying;
-  Serial.print(isPlaying ? "Play station: " : "Pause station: ");
+  if (isPlaying) {
+    stopAudioTone();
+    isPlaying = false;
+  } else {
+    isPlaying = true;
+    lv_label_set_text(stateLabel, "Playing");
+    setDotColor(lv_color_hex(0x57cc99));
+    updateStationUi();
+    renderNow();
+
+    startAudioTone();
+    isPlaying = false;
+  }
+
+  Serial.print("Preview test: ");
   Serial.println(kStations[selectedStation].name);
-  lv_label_set_text(stateLabel, isPlaying ? "Playing" : "Ready");
-  setDotColor(isPlaying ? lv_color_hex(0x57cc99) : lv_color_hex(0x56cfe1));
+  lv_label_set_text(stateLabel, "Ready");
+  setDotColor(lv_color_hex(0x56cfe1));
   updateStationUi();
   renderNow();
 }
@@ -599,12 +868,14 @@ void printEncryption(wifi_auth_mode_t type) {
   }
 }
 
-CandidateAp scanForBestFiveGhzAp() {
+CandidateAp scanForBestAp(const WifiProfile &profile) {
   CandidateAp best;
+  best.ssid = profile.ssid;
+  best.password = profile.password;
 
   Serial.println();
   Serial.print("Scanning for SSID: ");
-  Serial.println(WIFI_SSID);
+  Serial.println(profile.ssid);
   setStatus("Loading", "Preparing stations", lv_color_hex(0xffc857), 22);
 
   WiFi.mode(WIFI_STA);
@@ -629,7 +900,7 @@ CandidateAp scanForBestFiveGhzAp() {
     const String ssid = WiFi.SSID(i);
     const int32_t channel = WiFi.channel(i);
     const int32_t rssi = WiFi.RSSI(i);
-    const bool ssidMatches = ssid == WIFI_SSID;
+    const bool ssidMatches = ssid == profile.ssid;
     const bool isFiveGhz = isFiveGhzChannel(channel);
 
     Serial.print("  ");
@@ -647,7 +918,7 @@ CandidateAp scanForBestFiveGhzAp() {
     printEncryption(WiFi.encryptionType(i));
     Serial.println();
 
-    if (ssidMatches && isFiveGhz && rssi > best.rssi) {
+    if (ssidMatches && (!profile.requireFiveGhz || isFiveGhz) && rssi > best.rssi) {
       best.index = i;
       best.rssi = rssi;
       best.channel = channel;
@@ -656,12 +927,16 @@ CandidateAp scanForBestFiveGhzAp() {
   }
 
   if (best.index < 0) {
-    Serial.println("No 5 GHz AP found for the configured SSID.");
+    Serial.print("No ");
+    Serial.print(profile.requireFiveGhz ? "5 GHz " : "");
+    Serial.println("AP found for the configured SSID.");
     setStatus("Offline", "Station list ready", lv_color_hex(0xff5a5f), 12);
     updateStationUi();
   } else {
     const String bssid = macToString(best.bssid);
-    Serial.print("Selected 5 GHz AP: channel=");
+    Serial.print("Selected AP: SSID=");
+    Serial.print(profile.ssid);
+    Serial.print(" channel=");
     Serial.print(best.channel);
     Serial.print(" BSSID=");
     Serial.print(bssid);
@@ -683,12 +958,14 @@ bool connectToCandidate(const CandidateAp &ap) {
   }
 
   Serial.println();
-  Serial.println("Connecting to selected 5 GHz AP...");
+  Serial.print("Connecting to selected AP for ");
+  Serial.print(ap.ssid);
+  Serial.println("...");
   setStatus("Loading", "Preparing stations", lv_color_hex(0x56cfe1), 65);
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD, ap.channel, ap.bssid, true);
+  WiFi.begin(ap.ssid, ap.password, ap.channel, ap.bssid, true);
 
   const uint32_t startedAt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startedAt < kConnectTimeoutMs) {
@@ -699,6 +976,29 @@ bool connectToCandidate(const CandidateAp &ap) {
   Serial.println();
 
   return WiFi.status() == WL_CONNECTED;
+}
+
+bool connectToAvailableWifi() {
+  for (uint8_t i = 0; i < kWifiProfileCount; ++i) {
+    const WifiProfile &profile = kWifiProfiles[i];
+    const CandidateAp ap = scanForBestAp(profile);
+
+    if (connectToCandidate(ap)) {
+      return true;
+    }
+
+    Serial.println();
+    Serial.print("Could not connect to ");
+    Serial.print(profile.ssid);
+    Serial.println(".");
+
+    if (i + 1 < kWifiProfileCount) {
+      Serial.print("Trying fallback SSID: ");
+      Serial.println(kWifiProfiles[i + 1].ssid);
+    }
+  }
+
+  return false;
 }
 
 void updateConnectionUi() {
@@ -740,18 +1040,22 @@ void setup() {
 
   initDisplay();
   initUi();
+  initAudioOutput();
+  setStatus("Audio", "Boot audio test", lv_color_hex(0xffc857), 40);
+  playBlockingTone(1000);
 
   Serial.println();
   Serial.println("ESP32-C5 5 GHz Wi-Fi connection test");
   Serial.print("Target SSID: ");
   Serial.println(WIFI_SSID);
+  Serial.print("Fallback SSID: ");
+  Serial.println(WIFI_FALLBACK_SSID);
   setStatus("Starting", "Loading station list", lv_color_hex(0xffc857), 12);
 
-  const CandidateAp ap = scanForBestFiveGhzAp();
-  if (!connectToCandidate(ap)) {
+  if (!connectToAvailableWifi()) {
     Serial.println();
     Serial.println("Connection failed.");
-    Serial.println("Check that the AP is broadcasting on 5 GHz, the password is correct, and the board is close enough to the AP.");
+    Serial.println("Check that one configured AP is broadcasting, the passwords are correct, and the board is close enough to the AP.");
     setStatus("Offline", "Station list ready", lv_color_hex(0xff5a5f), 16);
     updateStationUi();
     return;
@@ -795,5 +1099,5 @@ void loop() {
     }
   }
 
-  delay(10);
+  delay(audioTonePlaying ? 1 : 10);
 }

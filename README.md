@@ -1,6 +1,6 @@
 # ESP32-C5 CYD Wi-Fi Test Firmware
 
-This firmware scans for `Innovation Lab`, selects the strongest 5 GHz BSSID, connects to that exact AP, and prints connection diagnostics over serial.
+This firmware scans for `Innovation Lab`, selects the strongest 5 GHz BSSID, connects to that exact AP, and prints connection diagnostics over serial. If `Innovation Lab` is unavailable or cannot connect, it falls back to `TP-Link_ABD8`.
 
 ## Build and Flash
 
@@ -35,10 +35,11 @@ The serial monitor should show:
 
 - scan results for all visible networks
 - `Innovation Lab` entries with channels above 14 marked as `5 GHz`
+- fallback attempts for `TP-Link_ABD8` if the primary network is unavailable
 - selected BSSID/channel/RSSI
 - connection result with IP address
 
-If it connects successfully and reports a channel above 14, the board is using 5 GHz Wi-Fi.
+If it connects successfully to `Innovation Lab` and reports a channel above 14, the board is using 5 GHz Wi-Fi. The fallback network may connect on either 2.4 GHz or 5 GHz.
 
 ## Credentials
 
