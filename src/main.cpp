@@ -98,6 +98,7 @@ lv_style_t styleStationText;
 lv_style_t styleStationSelectedText;
 lv_style_t styleHero;
 lv_style_t styleControl;
+lv_style_t styleControlPressed;
 lv_style_t styleControlPrimary;
 lv_style_t styleControlPending;
 lv_style_t styleControlPlaying;
@@ -1131,6 +1132,12 @@ void initUi() {
   lv_style_set_text_color(&styleControl, lv_color_hex(0xe8f1f5));
   lv_style_set_text_font(&styleControl, &lv_font_montserrat_14);
 
+  lv_style_init(&styleControlPressed);
+  lv_style_set_bg_color(&styleControlPressed, lv_color_hex(0x3a4d58));
+  lv_style_set_border_color(&styleControlPressed, lv_color_hex(0xffc857));
+  lv_style_set_transform_width(&styleControlPressed, 2);
+  lv_style_set_transform_height(&styleControlPressed, 2);
+
   lv_style_init(&styleControlPrimary);
   lv_style_set_bg_color(&styleControlPrimary, lv_color_hex(0x1f6f8b));
   lv_style_set_border_color(&styleControlPrimary, lv_color_hex(0x56cfe1));
@@ -1173,6 +1180,7 @@ void initUi() {
   volumeIconButton = lv_btn_create(card);
   lv_obj_remove_style_all(volumeIconButton);
   lv_obj_add_style(volumeIconButton, &styleControl, 0);
+  lv_obj_add_style(volumeIconButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(volumeIconButton, 40, 28);
   lv_obj_align(volumeIconButton, LV_ALIGN_TOP_RIGHT, 0, -4);
   lv_obj_add_event_cb(volumeIconButton, onVolumeIconClicked, LV_EVENT_CLICKED, nullptr);
@@ -1218,6 +1226,7 @@ void initUi() {
   prevButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(prevButton);
   lv_obj_add_style(prevButton, &styleControl, 0);
+  lv_obj_add_style(prevButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(prevButton, 74, 34);
   lv_obj_align(prevButton, LV_ALIGN_TOP_LEFT, 0, 88);
   lv_obj_add_event_cb(prevButton, onPrevClicked, LV_EVENT_CLICKED, nullptr);
@@ -1229,6 +1238,7 @@ void initUi() {
   playButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(playButton);
   lv_obj_add_style(playButton, &styleControl, 0);
+  lv_obj_add_style(playButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_add_style(playButton, &styleControlPrimary, 0);
   lv_obj_set_size(playButton, 112, 34);
   lv_obj_align(playButton, LV_ALIGN_TOP_MID, 0, 88);
@@ -1241,6 +1251,7 @@ void initUi() {
   nextButton = lv_btn_create(mainView);
   lv_obj_remove_style_all(nextButton);
   lv_obj_add_style(nextButton, &styleControl, 0);
+  lv_obj_add_style(nextButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(nextButton, 74, 34);
   lv_obj_align(nextButton, LV_ALIGN_TOP_RIGHT, 0, 88);
   lv_obj_add_event_cb(nextButton, onNextClicked, LV_EVENT_CLICKED, nullptr);
@@ -1284,6 +1295,7 @@ void initUi() {
   volumeDownButton = lv_btn_create(volumeTile);
   lv_obj_remove_style_all(volumeDownButton);
   lv_obj_add_style(volumeDownButton, &styleControl, 0);
+  lv_obj_add_style(volumeDownButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(volumeDownButton, 56, 38);
   lv_obj_align(volumeDownButton, LV_ALIGN_LEFT_MID, 6, 16);
   lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
@@ -1295,6 +1307,7 @@ void initUi() {
   volumeUpButton = lv_btn_create(volumeTile);
   lv_obj_remove_style_all(volumeUpButton);
   lv_obj_add_style(volumeUpButton, &styleControl, 0);
+  lv_obj_add_style(volumeUpButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(volumeUpButton, 56, 38);
   lv_obj_align(volumeUpButton, LV_ALIGN_RIGHT_MID, -6, 16);
   lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
@@ -1306,6 +1319,7 @@ void initUi() {
   backButton = lv_btn_create(volumeView);
   lv_obj_remove_style_all(backButton);
   lv_obj_add_style(backButton, &styleControl, 0);
+  lv_obj_add_style(backButton, &styleControlPressed, LV_STATE_PRESSED);
   lv_obj_set_size(backButton, 86, 34);
   lv_obj_align(backButton, LV_ALIGN_TOP_LEFT, 0, 136);
   lv_obj_add_event_cb(backButton, onBackClicked, LV_EVENT_CLICKED, nullptr);
