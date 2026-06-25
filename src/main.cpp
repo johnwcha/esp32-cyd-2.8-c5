@@ -507,6 +507,7 @@ bool beginRadioAudio() {
   radioVolume.begin(radioI2sConfig);
   radioVolume.setVolume(currentRadioVolume());
   radioDecoder.begin();
+  radioCopier.setCheckAvailable(false);
   radioAudioReady = true;
   return true;
 }
