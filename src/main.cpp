@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
+#include <AudioTools.h>
+#include <AudioTools/AudioCodecs/CodecMP3Helix.h>
+#include <AudioTools/Communication/HTTP/ICYStream.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <driver/i2s_std.h>
@@ -49,11 +52,12 @@ constexpr int8_t kSdCs = 10;
 constexpr uint32_t kAudioSampleRate = 44100;
 constexpr uint32_t kAudioToneHz = 880;
 constexpr uint8_t kAudioVolumePercent = 20;
-constexpr int16_t kAudioTonePeakAmplitude = 5000;
+constexpr float kRadioVolume = static_cast<float>(kAudioVolumePercent) / 100.0f;
+constexpr int16_t kAudioTonePeakAmplitude = 12000;
 constexpr int16_t kAudioToneAmplitude = (kAudioTonePeakAmplitude * kAudioVolumePercent) / 100;
 constexpr size_t kAudioFramesPerBuffer = 512;
 constexpr size_t kAudioSineTableSize = 256;
-constexpr uint32_t kAudioPreviewMs = 2000;
+constexpr uint32_t kAudioPreviewMs = 3500;
 constexpr uint32_t kAudioPinTestGapMs = 250;
 constexpr uint32_t kTouchSpiHz = 2500000;
 constexpr int16_t kTouchRawMinX = 250;
@@ -66,7 +70,6 @@ constexpr uint32_t kTouchDiagnosticIntervalMs = 1200;
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(kTftDc, kTftCs, kTftSck, kTftMosi, kTftMiso);
 Arduino_GFX *gfx = new Arduino_ST7789(bus, kTftRst, 1, false, 240, 320);
-
 lv_disp_draw_buf_t drawBuffer;
 lv_color_t drawBuffer1[kScreenWidth * kDrawBufferRows];
 lv_color_t drawBuffer2[kScreenWidth * kDrawBufferRows];
@@ -79,6 +82,7 @@ lv_obj_t *statusDot = nullptr;
 lv_obj_t *titleLabel = nullptr;
 lv_obj_t *stateLabel = nullptr;
 lv_obj_t *detailLabel = nullptr;
+lv_obj_t *touchMarker = nullptr;
 
 lv_style_t styleScreen;
 lv_style_t styleCard;
@@ -101,6 +105,14 @@ uint32_t audioPhase = 0;
 int16_t audioSineTable[kAudioSineTableSize] = {};
 int16_t audioSampleBuffer[kAudioFramesPerBuffer * 2] = {};
 TaskHandle_t audioTaskHandle = nullptr;
+I2SConfig radioI2sConfig;
+ICYStream radioStream(1024);
+I2SStream radioI2s;
+VolumeStream radioVolume(radioI2s);
+EncodedAudioStream radioDecoder(&radioVolume, new MP3DecoderHelix());
+StreamCopy radioCopier(radioDecoder, radioStream);
+bool radioAudioReady = false;
+bool radioStreaming = false;
 
 struct AudioPinProfile {
   const char *name;
@@ -126,11 +138,11 @@ struct Station {
 };
 
 const Station kStations[] = {
-    {"KEXP", "Seattle music discovery", "AAC 160k", "https://kexp.streamguys1.com/kexp160.aac"},
+    {"Radio Swiss Jazz", "Commercial-free jazz", "MP3 128k", "http://stream.srg-ssr.ch/m/rsj/mp3_128"},
     {"SomaFM Groove Salad", "Downtempo ambient", "MP3 128k", "https://ice5.somafm.com/groovesalad-128-mp3"},
     {"Radio Paradise", "Eclectic human-curated mix", "MP3", "https://stream.radioparadise.com/mp3-128"},
-    {"BBC World Service", "Global news", "MP3", "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
-    {"SomaFM Live", "Independent live sets", "MP3 128k", "https://ice5.somafm.com/live-128-mp3"},
+    {"France Musique", "Classical and culture", "MP3", "http://icecast.radiofrance.fr/francemusique-midfi.mp3"},
+    {"SomaFM Live", "Independent live sets", "MP3 128k", "http://ice5.somafm.com/live-128-mp3"},
 };
 
 constexpr uint8_t kStationCount = sizeof(kStations) / sizeof(kStations[0]);
@@ -169,6 +181,8 @@ const WifiProfile kWifiProfiles[] = {
 };
 
 constexpr uint8_t kWifiProfileCount = sizeof(kWifiProfiles) / sizeof(kWifiProfiles[0]);
+
+void deinitAudioOutput();
 
 bool isFiveGhzChannel(int32_t channel) {
   return channel > 14;
@@ -293,7 +307,11 @@ bool readTouchPoint(int16_t &x, int16_t &y, int16_t &pressure) {
     Serial.print(") pressure=");
     Serial.println(pressure);
     if (detailLabel) {
-      lv_label_set_text_fmt(detailLabel, "Touch: %d,%d", x, y);
+      lv_label_set_text_fmt(detailLabel, "Touch %d,%d raw %d,%d", x, y, rawA, rawB);
+    }
+    if (touchMarker) {
+      lv_obj_clear_flag(touchMarker, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_pos(touchMarker, clampCoordinate(x - 4, 0, kScreenWidth - 8), clampCoordinate(y - 4, 0, kScreenHeight - 8));
     }
   }
 
@@ -308,6 +326,9 @@ void readTouch(lv_indev_drv_t *driver, lv_indev_data_t *data) {
   int16_t pressure = 0;
   if (!readTouchPoint(x, y, pressure)) {
     data->state = LV_INDEV_STATE_REL;
+    if (touchMarker) {
+      lv_obj_add_flag(touchMarker, LV_OBJ_FLAG_HIDDEN);
+    }
     return;
   }
 
@@ -360,6 +381,100 @@ bool checkEsp(esp_err_t result, const char *step) {
   Serial.print(" failed: ");
   Serial.println(esp_err_to_name(result));
   return false;
+}
+
+void onRadioMetadata(MetaDataType type, const char *text, int length) {
+  if (type != MetaDataType::Title || !text || length <= 0) {
+    return;
+  }
+
+  Serial.print("Stream title: ");
+  Serial.write(reinterpret_cast<const uint8_t *>(text), length);
+  Serial.println();
+
+  if (detailLabel) {
+    const size_t copyLength = min(static_cast<size_t>(length), static_cast<size_t>(80));
+    char buffer[81] = {};
+    memcpy(buffer, text, copyLength);
+    lv_label_set_text(detailLabel, buffer);
+    renderNow();
+  }
+}
+
+bool beginRadioAudio() {
+  if (radioAudioReady) {
+    return true;
+  }
+
+  deinitAudioOutput();
+  AudioLogger::instance().begin(Serial, AudioLogger::Error);
+  radioStream.setMetadataCallback(onRadioMetadata);
+
+  const AudioPinProfile &profile = kAudioPinProfiles[0];
+  radioI2sConfig = radioI2s.defaultConfig(TX_MODE);
+  radioI2sConfig.pin_bck = profile.bclk;
+  radioI2sConfig.pin_ws = profile.lrc;
+  radioI2sConfig.pin_data = profile.dout;
+
+  Serial.println();
+  Serial.println("Initializing MP3 stream I2S output.");
+  Serial.print("BCLK=IO");
+  Serial.print(profile.bclk);
+  Serial.print(" LRC=IO");
+  Serial.print(profile.lrc);
+  Serial.print(" DIN=IO");
+  Serial.println(profile.dout);
+
+  if (!radioI2s.begin(radioI2sConfig)) {
+    Serial.println("AudioTools I2S begin failed.");
+    setStatus("Audio", "I2S stream setup failed", lv_color_hex(0xff5a5f), 16);
+    return false;
+  }
+
+  radioVolume.begin(radioI2sConfig);
+  radioVolume.setVolume(kRadioVolume);
+  radioDecoder.begin();
+  radioAudioReady = true;
+  return true;
+}
+
+void stopRadioStream() {
+  if (!radioStreaming && !radioAudioReady) {
+    return;
+  }
+
+  Serial.println("Stopping radio stream.");
+  radioStream.end();
+  radioDecoder.end();
+  radioVolume.end();
+  radioI2s.end();
+  radioStreaming = false;
+  radioAudioReady = false;
+}
+
+bool startRadioStream() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot start stream: Wi-Fi is not connected.");
+    setStatus("Offline", "Wi-Fi required for streaming", lv_color_hex(0xff5a5f), 18);
+    return false;
+  }
+
+  const Station &station = kStations[selectedStation];
+  stopRadioStream();
+
+  if (!beginRadioAudio()) {
+    return false;
+  }
+
+  Serial.print("Starting MP3 stream: ");
+  Serial.print(station.name);
+  Serial.print(" -> ");
+  Serial.println(station.url);
+
+  setStatus("Opening", station.name, lv_color_hex(0xffc857), 72);
+  radioStream.begin(station.url, "audio/mp3");
+  radioStreaming = true;
+  return true;
 }
 
 void buildAudioSineTable() {
@@ -623,8 +738,8 @@ void updateStationUi() {
   lv_label_set_text(stationTaglineLabel, station.tagline);
   lv_label_set_text(stationCodecLabel, station.codec);
   lv_label_set_text_fmt(stationIndexLabel, "%u / %u", selectedStation + 1, kStationCount);
-  lv_label_set_text(playButtonLabel, isPlaying ? "Stop" : "Test");
-  lv_label_set_text(detailLabel, isPlaying ? "Running I2S tone test" : "Stream playback pending");
+  lv_label_set_text(playButtonLabel, radioStreaming ? "Stop" : "Play");
+  lv_label_set_text(detailLabel, radioStreaming ? "Streaming MP3" : "Ready to stream MP3");
 }
 
 void selectStation(uint8_t index) {
@@ -648,29 +763,32 @@ void selectStation(uint8_t index) {
 void selectRelativeStation(int8_t delta) {
   const int next = (static_cast<int>(selectedStation) + delta + kStationCount) % kStationCount;
   stopAudioTone();
+  stopRadioStream();
   isPlaying = false;
   selectStation(static_cast<uint8_t>(next));
 }
 
 void togglePlay() {
-  if (isPlaying) {
+  if (radioStreaming) {
+    stopRadioStream();
     stopAudioTone();
     isPlaying = false;
   } else {
     isPlaying = true;
-    lv_label_set_text(stateLabel, "Playing");
+    lv_label_set_text(stateLabel, "Opening");
     setDotColor(lv_color_hex(0x57cc99));
     updateStationUi();
     renderNow();
 
-    startAudioTone();
-    isPlaying = false;
+    if (!startRadioStream()) {
+      isPlaying = false;
+    }
   }
 
-  Serial.print("Preview test: ");
+  Serial.print("Radio button: ");
   Serial.println(kStations[selectedStation].name);
-  lv_label_set_text(stateLabel, "Ready");
-  setDotColor(lv_color_hex(0x56cfe1));
+  lv_label_set_text(stateLabel, radioStreaming ? "Playing" : "Ready");
+  setDotColor(radioStreaming ? lv_color_hex(0x57cc99) : lv_color_hex(0x56cfe1));
   updateStationUi();
   renderNow();
 }
@@ -801,6 +919,13 @@ void initUi() {
   lv_obj_t *screen = lv_scr_act();
   lv_obj_add_style(screen, &styleScreen, 0);
 
+  touchMarker = lv_obj_create(screen);
+  lv_obj_remove_style_all(touchMarker);
+  lv_obj_set_size(touchMarker, 8, 8);
+  lv_obj_set_style_radius(touchMarker, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(touchMarker, lv_color_hex(0xffc857), 0);
+  lv_obj_add_flag(touchMarker, LV_OBJ_FLAG_HIDDEN);
+
   lv_obj_t *card = lv_obj_create(screen);
   lv_obj_remove_style_all(card);
   lv_obj_add_style(card, &styleCard, 0);
@@ -872,7 +997,7 @@ void initUi() {
   lv_obj_add_event_cb(playButton, onPlayClicked, LV_EVENT_CLICKED, nullptr);
 
   playButtonLabel = lv_label_create(playButton);
-  lv_label_set_text(playButtonLabel, "Test");
+  lv_label_set_text(playButtonLabel, "Play");
   lv_obj_center(playButtonLabel);
 
   nextButton = lv_btn_create(card);
@@ -1100,8 +1225,7 @@ void setup() {
 
   initDisplay();
   initUi();
-  setStatus("Audio", "Boot pin test", lv_color_hex(0xffc857), 40);
-  playAudioDiagnosticSweep(900);
+  setStatus("Audio", "Amp ready", lv_color_hex(0xffc857), 40);
 
   Serial.println();
   Serial.println("ESP32-C5 5 GHz Wi-Fi connection test");
@@ -1156,6 +1280,10 @@ void loop() {
       updateStationUi();
       renderNow();
     }
+  }
+
+  if (radioStreaming) {
+    radioCopier.copy();
   }
 
   delay(audioTonePlaying ? 1 : 10);
