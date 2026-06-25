@@ -316,9 +316,6 @@ bool readTouchPoint(int16_t &x, int16_t &y, int16_t &pressure) {
     Serial.print(y);
     Serial.print(") pressure=");
     Serial.println(pressure);
-    if (detailLabel) {
-      lv_label_set_text_fmt(detailLabel, "Touch %d,%d raw %d,%d", x, y, rawA, rawB);
-    }
     if (touchMarker) {
       lv_obj_clear_flag(touchMarker, LV_OBJ_FLAG_HIDDEN);
       lv_obj_set_pos(touchMarker, clampCoordinate(x - 4, 0, kScreenWidth - 8), clampCoordinate(y - 4, 0, kScreenHeight - 8));
@@ -1116,15 +1113,17 @@ void initUi() {
 
   volumeView = lv_obj_create(card);
   lv_obj_remove_style_all(volumeView);
-  lv_obj_set_size(volumeView, 276, 190);
-  lv_obj_align(volumeView, LV_ALIGN_TOP_LEFT, 0, 34);
+  lv_obj_set_size(volumeView, 276, 176);
+  lv_obj_align(volumeView, LV_ALIGN_TOP_LEFT, 0, 30);
+  lv_obj_clear_flag(volumeView, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(volumeView, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_t *volumeTile = lv_obj_create(volumeView);
   lv_obj_remove_style_all(volumeTile);
   lv_obj_add_style(volumeTile, &styleHero, 0);
-  lv_obj_set_size(volumeTile, 276, 142);
+  lv_obj_set_size(volumeTile, 276, 118);
   lv_obj_align(volumeTile, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_clear_flag(volumeTile, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t *volumeTitleLabel = lv_label_create(volumeTile);
   lv_obj_add_style(volumeTitleLabel, &styleTitle, 0);
@@ -1136,13 +1135,13 @@ void initUi() {
   lv_obj_add_style(volumeLabel, &styleTitle, 0);
   lv_obj_set_width(volumeLabel, 120);
   lv_label_set_text(volumeLabel, "Vol 35%");
-  lv_obj_align(volumeLabel, LV_ALIGN_CENTER, 0, -2);
+  lv_obj_align(volumeLabel, LV_ALIGN_CENTER, 0, 8);
 
   volumeDownButton = lv_btn_create(volumeTile);
   lv_obj_remove_style_all(volumeDownButton);
   lv_obj_add_style(volumeDownButton, &styleControl, 0);
-  lv_obj_set_size(volumeDownButton, 56, 42);
-  lv_obj_align(volumeDownButton, LV_ALIGN_LEFT_MID, 6, 20);
+  lv_obj_set_size(volumeDownButton, 56, 38);
+  lv_obj_align(volumeDownButton, LV_ALIGN_LEFT_MID, 6, 16);
   lv_obj_add_event_cb(volumeDownButton, onVolumeDownClicked, LV_EVENT_CLICKED, nullptr);
 
   volumeDownButtonLabel = lv_label_create(volumeDownButton);
@@ -1152,8 +1151,8 @@ void initUi() {
   volumeUpButton = lv_btn_create(volumeTile);
   lv_obj_remove_style_all(volumeUpButton);
   lv_obj_add_style(volumeUpButton, &styleControl, 0);
-  lv_obj_set_size(volumeUpButton, 56, 42);
-  lv_obj_align(volumeUpButton, LV_ALIGN_RIGHT_MID, -6, 20);
+  lv_obj_set_size(volumeUpButton, 56, 38);
+  lv_obj_align(volumeUpButton, LV_ALIGN_RIGHT_MID, -6, 16);
   lv_obj_add_event_cb(volumeUpButton, onVolumeUpClicked, LV_EVENT_CLICKED, nullptr);
 
   volumeUpButtonLabel = lv_label_create(volumeUpButton);
@@ -1164,7 +1163,7 @@ void initUi() {
   lv_obj_remove_style_all(backButton);
   lv_obj_add_style(backButton, &styleControl, 0);
   lv_obj_set_size(backButton, 86, 34);
-  lv_obj_align(backButton, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_align(backButton, LV_ALIGN_TOP_LEFT, 0, 136);
   lv_obj_add_event_cb(backButton, onBackClicked, LV_EVENT_CLICKED, nullptr);
 
   backButtonLabel = lv_label_create(backButton);
