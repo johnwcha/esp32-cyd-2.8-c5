@@ -3,12 +3,12 @@
 #include <AudioTools.h>
 #include <AudioTools/AudioCodecs/CodecMP3Helix.h>
 #include <AudioTools/Communication/HTTP/ICYStream.h>
-#include <HTTPClient.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <driver/i2s_std.h>
 #include <lvgl.h>
 #include <math.h>
+#include <time.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -36,6 +36,11 @@ namespace {
 constexpr uint32_t kSerialBaud = 115200;
 constexpr uint32_t kScanDelayMs = 250;
 constexpr uint32_t kConnectTimeoutMs = 30000;
+constexpr uint32_t kTimeSyncTimeoutMs = 10000;
+constexpr uint32_t kClockRefreshMs = 1000;
+constexpr const char *kTimezone = "PST8PDT,M3.2.0,M11.1.0";
+constexpr const char *kNtpServer1 = "pool.ntp.org";
+constexpr const char *kNtpServer2 = "time.nist.gov";
 
 constexpr int16_t kScreenWidth = 320;
 constexpr int16_t kScreenHeight = 240;
@@ -59,6 +64,13 @@ constexpr size_t kAudioFramesPerBuffer = 512;
 constexpr size_t kAudioSineTableSize = 256;
 constexpr uint32_t kAudioPreviewMs = 3500;
 constexpr uint32_t kAudioPinTestGapMs = 250;
+constexpr int kRadioStreamBufferBytes = 8192;
+constexpr uint32_t kRadioPlaybackConfirmBytes = 1024;
+constexpr uint32_t kRadioStartupTimeoutMs = 30000;
+constexpr uint32_t kRadioStallReconnectMs = 12000;
+constexpr uint8_t kRadioMaxReconnectAttempts = 3;
+constexpr uint8_t kRadioCopiesPerLoop = 6;
+constexpr uint32_t kRadioCopyReportMs = 2000;
 constexpr uint32_t kTouchSpiHz = 2500000;
 constexpr int16_t kTouchRawMinX = 250;
 constexpr int16_t kTouchRawMaxX = 3800;
@@ -111,7 +123,7 @@ int16_t audioSineTable[kAudioSineTableSize] = {};
 int16_t audioSampleBuffer[kAudioFramesPerBuffer * 2] = {};
 TaskHandle_t audioTaskHandle = nullptr;
 I2SConfig radioI2sConfig;
-ICYStream radioStream(1024);
+ICYStream radioStream(kRadioStreamBufferBytes);
 I2SStream radioI2s;
 VolumeStream radioVolume(radioI2s);
 EncodedAudioStream radioDecoder(&radioVolume, new MP3DecoderHelix());
@@ -123,7 +135,9 @@ String activeStreamUrl;
 uint32_t radioStreamStartedAtMs = 0;
 uint32_t radioLastBytesAtMs = 0;
 uint32_t radioLastStatusAtMs = 0;
+uint32_t radioLastCopyReportAtMs = 0;
 uint32_t radioCopiedBytes = 0;
+uint8_t radioReconnectAttempts = 0;
 bool radioPlaybackConfirmed = false;
 
 enum class PlayVisualState {
@@ -159,7 +173,8 @@ const Station kStations[] = {
     {"LAist 89.3", "LA news and NPR", "MP3 128k", "http://live.amperwave.net/direct/southerncalipr-kpccfmmp3-imc.mp3?source=kpcc"},
     {"KUSC 91.5", "USC classical radio", "MP3 96k", "http://playerservices.streamtheworld.com/api/livestream-redirect/KUSCMP96.mp3"},
     {"KCRW 89.9", "Santa Monica public radio", "MP3 192k", "http://streams.kcrw.com/kcrw_mp3"},
-    {"KJAZZ 88.1", "Long Beach jazz", "MP3 128k", "http://streaming.live365.com/a49833"},
+    {"KKLA 99.5", "Christian talk radio", "MP3 64k", "http://playerservices.streamtheworld.com/api/livestream-redirect/KKLAFM.mp3"},
+    {"KAZN AM 1300", "Mandarin Chinese radio", "MP3 128k", "http://video1.getstreamhosting.com:8308/stream"},
     {"KXLU 88.9", "LMU independent radio", "MP3 320k", "http://kxlu.streamguys1.com/kxlu-hi"},
 };
 
@@ -421,6 +436,65 @@ void setStatus(const char *state, const char *detail, lv_color_t dotColor, int p
   renderNow();
 }
 
+void updateClockTitle(bool force = false) {
+  static int lastMinute = -1;
+
+  if (!titleLabel) {
+    return;
+  }
+
+  struct tm localTime = {};
+  if (!getLocalTime(&localTime, 5)) {
+    if (force) {
+      lv_label_set_text(titleLabel, "--/-- --- --:--");
+      renderNow();
+    }
+    return;
+  }
+
+  if (!force && localTime.tm_min == lastMinute) {
+    return;
+  }
+  lastMinute = localTime.tm_min;
+
+  int hour = localTime.tm_hour;
+  const char *period = hour >= 12 ? "pm" : "am";
+  hour %= 12;
+  if (hour == 0) {
+    hour = 12;
+  }
+
+  const char *weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  const char *weekday = (localTime.tm_wday >= 0 && localTime.tm_wday < 7) ? weekdays[localTime.tm_wday] : "---";
+  lv_label_set_text_fmt(titleLabel, "%d/%d %s %d:%02d %s",
+                        localTime.tm_mon + 1,
+                        localTime.tm_mday,
+                        weekday,
+                        hour,
+                        localTime.tm_min,
+                        period);
+  renderNow();
+}
+
+bool syncClock() {
+  setenv("TZ", kTimezone, 1);
+  tzset();
+  configTzTime(kTimezone, kNtpServer1, kNtpServer2);
+
+  const uint32_t startedAt = millis();
+  while (millis() - startedAt < kTimeSyncTimeoutMs) {
+    struct tm localTime = {};
+    if (getLocalTime(&localTime, 250)) {
+      updateClockTitle(true);
+      return true;
+    }
+    renderNow();
+  }
+
+  updateClockTitle(true);
+  return false;
+}
+
 void setStreamStatus(const char *state, const Station &station, lv_color_t dotColor) {
   if (detailLabel) {
     lv_label_set_text_fmt(detailLabel, "%s %s", state, station.name);
@@ -455,7 +529,7 @@ float currentRadioVolume() {
 
 void refreshVolumeUi() {
   if (volumeLabel) {
-    lv_label_set_text_fmt(volumeLabel, "Vol %u%%", currentVolumePercent);
+    lv_label_set_text_fmt(volumeLabel, "%u%%", currentVolumePercent);
   }
 }
 
@@ -566,61 +640,12 @@ void stopRadioStream() {
   radioStreamStartedAtMs = 0;
   radioLastBytesAtMs = 0;
   radioLastStatusAtMs = 0;
+  radioLastCopyReportAtMs = 0;
   radioCopiedBytes = 0;
   radioPlaybackConfirmed = false;
 }
 
-String resolveStreamUrl(const char *url) {
-  String currentUrl(url);
-
-  for (uint8_t i = 0; i < 4; ++i) {
-    HTTPClient http;
-    http.setConnectTimeout(5000);
-    http.setTimeout(5000);
-    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
-
-    if (!http.begin(currentUrl)) {
-      Serial.print("Redirect probe could not open: ");
-      Serial.println(currentUrl);
-      return currentUrl;
-    }
-
-    const int code = http.sendRequest("HEAD");
-    const String location = http.getLocation();
-    http.end();
-
-    Serial.print("Redirect probe ");
-    Serial.print(code);
-    Serial.print(": ");
-    Serial.println(currentUrl);
-
-    if (code == HTTP_CODE_OK) {
-      return currentUrl;
-    }
-
-    if ((code == HTTP_CODE_MOVED_PERMANENTLY || code == HTTP_CODE_FOUND || code == HTTP_CODE_TEMPORARY_REDIRECT ||
-         code == HTTP_CODE_PERMANENT_REDIRECT) &&
-        location.length() > 0) {
-      if (location.startsWith("http://")) {
-        currentUrl = location;
-      } else if (location.startsWith("/")) {
-        const int schemeEnd = currentUrl.indexOf("://");
-        const int hostStart = schemeEnd >= 0 ? schemeEnd + 3 : 0;
-        const int pathStart = currentUrl.indexOf('/', hostStart);
-        currentUrl = pathStart >= 0 ? currentUrl.substring(0, pathStart) + location : currentUrl + location;
-      } else {
-        currentUrl = location;
-      }
-      continue;
-    }
-
-    return currentUrl;
-  }
-
-  return currentUrl;
-}
-
-bool startRadioStream() {
+bool startRadioStream(bool resetReconnectCounter = true) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Cannot start stream: Wi-Fi is not connected.");
     setStatus("Offline", "Wi-Fi required for streaming", lv_color_hex(0xff5a5f), 18);
@@ -640,12 +665,12 @@ bool startRadioStream() {
   Serial.println(station.url);
 
   setStreamStatus("Connecting", station, lv_color_hex(0xffc857));
-  activeStreamUrl = resolveStreamUrl(station.url);
-  Serial.print("Resolved MP3 stream: ");
+  activeStreamUrl = station.url;
+  Serial.print("Opening MP3 stream: ");
   Serial.println(activeStreamUrl);
 
   setStreamStatus("Opening", station, lv_color_hex(0xffc857));
-  if (!radioStream.begin(activeStreamUrl.c_str(), "audio/mp3")) {
+  if (!radioStream.begin(activeStreamUrl.c_str(), "audio/mpeg")) {
     Serial.println("Stream open failed.");
     stopRadioStream();
     setStatus("Offline", "Stream open failed", lv_color_hex(0xff5a5f), 18);
@@ -656,7 +681,11 @@ bool startRadioStream() {
   radioStreamStartedAtMs = millis();
   radioLastBytesAtMs = radioStreamStartedAtMs;
   radioLastStatusAtMs = radioStreamStartedAtMs;
+  radioLastCopyReportAtMs = radioStreamStartedAtMs;
   radioCopiedBytes = 0;
+  if (resetReconnectCounter) {
+    radioReconnectAttempts = 0;
+  }
   radioPlaybackConfirmed = false;
   setStreamStatus("Buffering", station, lv_color_hex(0xffc857));
   return true;
@@ -986,9 +1015,9 @@ void togglePlay() {
   Serial.print("Radio button: ");
   Serial.println(kStations[selectedStation].name);
   if (stateLabel) {
-    lv_label_set_text(stateLabel, radioStreaming ? "Playing" : "Ready");
+    lv_label_set_text(stateLabel, radioStreaming ? (radioPlaybackConfirmed ? "Playing" : "Buffering") : "Ready");
   }
-  setDotColor(radioStreaming ? lv_color_hex(0x57cc99) : lv_color_hex(0x56cfe1));
+  setDotColor(radioStreaming ? (radioPlaybackConfirmed ? lv_color_hex(0x57cc99) : lv_color_hex(0xffc857)) : lv_color_hex(0x56cfe1));
   updateStationUi();
   renderNow();
 }
@@ -1174,7 +1203,9 @@ void initUi() {
   lv_obj_align(statusDot, LV_ALIGN_TOP_LEFT, 0, 3);
 
   titleLabel = makeLabel(card, &styleTitle);
-  lv_label_set_text(titleLabel, "Internet Radio");
+  lv_obj_set_width(titleLabel, 232);
+  lv_label_set_long_mode(titleLabel, LV_LABEL_LONG_DOT);
+  lv_label_set_text(titleLabel, "--/-- --- --:--");
   lv_obj_align(titleLabel, LV_ALIGN_TOP_LEFT, 22, 0);
 
   volumeIconButton = lv_btn_create(card);
@@ -1288,8 +1319,9 @@ void initUi() {
 
   volumeLabel = lv_label_create(volumeTile);
   lv_obj_add_style(volumeLabel, &styleTitle, 0);
-  lv_obj_set_width(volumeLabel, 120);
-  lv_label_set_text(volumeLabel, "Vol 35%");
+  lv_obj_set_width(volumeLabel, 156);
+  lv_obj_set_style_text_align(volumeLabel, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(volumeLabel, "35%");
   lv_obj_align(volumeLabel, LV_ALIGN_CENTER, 0, 8);
 
   volumeDownButton = lv_btn_create(volumeTile);
@@ -1506,10 +1538,10 @@ void updateConnectionUi() {
 
   if (radioStreaming) {
     if (stateLabel) {
-      lv_label_set_text(stateLabel, "Playing");
+      lv_label_set_text(stateLabel, radioPlaybackConfirmed ? "Playing" : "Buffering");
     }
-    setDotColor(lv_color_hex(0x57cc99));
-    setProgress(100);
+    setDotColor(radioPlaybackConfirmed ? lv_color_hex(0x57cc99) : lv_color_hex(0xffc857));
+    setProgress(radioPlaybackConfirmed ? 100 : 72);
     updateStationUi();
     renderNow();
     return;
@@ -1567,12 +1599,16 @@ void setup() {
   }
 
   printConnectionReport();
+  if (!syncClock()) {
+    Serial.println("Time sync timed out.");
+  }
   updateConnectionUi();
 }
 
 void loop() {
   static wl_status_t lastStatus = WL_IDLE_STATUS;
   static uint32_t lastReportAt = 0;
+  static uint32_t lastClockRefreshAt = 0;
 
   const uint32_t now = millis();
   lv_tick_inc(now - lastLvTickMs);
@@ -1585,6 +1621,11 @@ void loop() {
     Serial.println(static_cast<int>(status));
     lastStatus = status;
     updateConnectionUi();
+  }
+
+  if (now - lastClockRefreshAt > kClockRefreshMs) {
+    lastClockRefreshAt = now;
+    updateClockTitle();
   }
 
   if (millis() - lastReportAt > 5000) {
@@ -1605,7 +1646,16 @@ void loop() {
   }
 
   if (radioStreaming) {
-    const size_t copied = radioCopier.copy();
+    size_t copied = 0;
+    for (uint8_t i = 0; i < kRadioCopiesPerLoop && radioStreaming; ++i) {
+      const size_t chunkCopied = radioCopier.copy();
+      copied += chunkCopied;
+      if (chunkCopied == 0) {
+        break;
+      }
+      yield();
+    }
+
     const uint32_t now = millis();
     const Station &station = kStations[selectedStation];
 
@@ -1613,9 +1663,36 @@ void loop() {
       radioCopiedBytes += copied;
       radioLastBytesAtMs = now;
 
-      if (!radioPlaybackConfirmed && radioCopiedBytes > 4096) {
+      if (now - radioLastCopyReportAtMs > kRadioCopyReportMs) {
+        radioLastCopyReportAtMs = now;
+        Serial.print("Stream bytes copied: ");
+        Serial.print(radioCopiedBytes);
+        Serial.print(" total, ");
+        Serial.print(copied);
+        Serial.println(" this loop.");
+      }
+
+      if (!radioPlaybackConfirmed && radioCopiedBytes > kRadioPlaybackConfirmBytes) {
         radioPlaybackConfirmed = true;
+        radioReconnectAttempts = 0;
+        Serial.print("Stream playback confirmed after ");
+        Serial.print(radioCopiedBytes);
+        Serial.println(" bytes.");
         setStreamStatus("Playing", station, lv_color_hex(0x57cc99));
+      }
+    } else if (!radioPlaybackConfirmed && now - radioLastBytesAtMs > kRadioStartupTimeoutMs) {
+      if (radioReconnectAttempts < kRadioMaxReconnectAttempts) {
+        ++radioReconnectAttempts;
+        Serial.print("Stream did not produce bytes; reconnect attempt ");
+        Serial.print(radioReconnectAttempts);
+        Serial.print("/");
+        Serial.println(kRadioMaxReconnectAttempts);
+        setStreamStatus("Retrying", station, lv_color_hex(0xffc857));
+        startRadioStream(false);
+      } else {
+        Serial.println("Stream stayed silent after reconnect attempts.");
+        stopRadioStream();
+        setStatus("Offline", "Stream produced no audio", lv_color_hex(0xff5a5f), 18);
       }
     } else if (!radioPlaybackConfirmed && now - radioLastStatusAtMs > 1000) {
       radioLastStatusAtMs = now;
@@ -1624,11 +1701,21 @@ void loop() {
       }
       setDotColor(lv_color_hex(0xffc857));
       renderNow();
-    } else if (radioPlaybackConfirmed && now - radioLastBytesAtMs > 3000 && now - radioLastStatusAtMs > 1000) {
+    } else if (radioPlaybackConfirmed && now - radioLastBytesAtMs > kRadioStallReconnectMs && now - radioLastStatusAtMs > 1000) {
       radioLastStatusAtMs = now;
-      setStreamStatus("Buffering", station, lv_color_hex(0xffc857));
-      radioPlaybackConfirmed = false;
-      radioCopiedBytes = 0;
+      if (radioReconnectAttempts < kRadioMaxReconnectAttempts) {
+        ++radioReconnectAttempts;
+        Serial.print("Stream stalled; reconnect attempt ");
+        Serial.print(radioReconnectAttempts);
+        Serial.print("/");
+        Serial.println(kRadioMaxReconnectAttempts);
+        setStreamStatus("Retrying", station, lv_color_hex(0xffc857));
+        startRadioStream(false);
+      } else {
+        Serial.println("Stream stalled after reconnect attempts.");
+        stopRadioStream();
+        setStatus("Offline", "Stream stalled", lv_color_hex(0xff5a5f), 18);
+      }
     }
   }
 
